@@ -96,6 +96,22 @@ case_column_headers = True
 # %USERPROFILE% is typically C:\Users\{username}
 history_file = default
 
+# Store query history in atuin instead of history_file, tagged with atuin_author
+# so it stays separable from shell history (atuin search --author pgcli).
+# Queries already in history_file remain readable; they are not imported.
+# Falls back to history_file if the atuin executable is missing.
+atuin_history = False
+
+# Author tag applied to entries written to atuin.
+atuin_author = pgcli
+
+# Bind Up to atuin's own search UI, the way `atuin init zsh` does. Up only takes
+# over for a single-line buffer, so it still moves the cursor in multi-line SQL
+# and through the completion menu. Requires atuin_history, since atuin's picker
+# can only see entries pgcli recorded there -- Ctrl-R keeps pgcli's own reverse
+# search, which also covers the older history_file.
+atuin_keys = False
+
 # Default log level. Possible values: "CRITICAL", "ERROR", "WARNING", "INFO"
 # and "DEBUG". "NONE" disables logging.
 log_level = INFO

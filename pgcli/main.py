@@ -69,6 +69,8 @@ from .config import (
     get_config,
     get_config_filename,
 )
+from . import atuin
+from .atuin import AtuinHistory
 from .key_bindings import pgcli_bindings
 from .packages.formatter.sqlformatter import register_new_formatter
 from .packages.prompt_utils import confirm, confirm_destructive_query
@@ -228,6 +230,9 @@ class PGCli:
         self.vi_mode = c["main"].as_bool("vi")
         self.auto_expand = auto_vertical_output or c["main"].as_bool("auto_expand")
         self.auto_retry_closed_connection = c["main"].as_bool("auto_retry_closed_connection")
+        self.atuin_history = c["main"].as_bool("atuin_history")
+        self.atuin_author = c["main"]["atuin_author"]
+        self.atuin_keys = c["main"].as_bool("atuin_keys")
         self.expanded_output = c["main"].as_bool("expand")
         self.pgspecial.timing_enabled = c["main"].as_bool("timing")
         if row_limit is not None:
@@ -1010,6 +1015,17 @@ class PGCli:
         if history_file == "default":
             history_file = config_location() + "history"
         history = FileHistory(os.path.expanduser(history_file))
+        if self.atuin_history:
+            if atuin.is_available():
+                # The file history stays as `legacy` so queries recorded before
+                # the switch remain reachable without importing them into atuin.
+                history = AtuinHistory(author=self.atuin_author, legacy=history)
+            else:
+                click.secho(
+                    "Error: atuin_history is on but the atuin executable was not found. Falling back to the history file.",
+                    err=True,
+                    fg="red",
+                )
         self.refresh_completions(history=history, persist_priorities="none")
 
         self.prompt_app = self._build_cli(history)

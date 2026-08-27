@@ -6,9 +6,11 @@ from prompt_toolkit.filters import (
     is_searching,
     has_completions,
     has_selection,
+    shift_selection_mode,
     vi_mode,
 )
 
+from . import atuin
 from .pgbuffer import buffer_should_be_handled, safe_multi_line_mode
 
 _logger = logging.getLogger(__name__)
@@ -19,6 +21,24 @@ def pgcli_bindings(pgcli):
     kb = KeyBindings()
 
     tab_insert_text = " " * 4
+
+    # Registered only when enabled, so the default Up binding is untouched
+    # otherwise. ~shift_selection_mode leaves shift-selection to prompt_toolkit.
+    if pgcli.atuin_keys and pgcli.atuin_history and atuin.is_available():
+
+        @kb.add("up", filter=~shift_selection_mode)
+        def _(event):
+            """Open atuin's history UI, mirroring `atuin init zsh`'s up-arrow widget."""
+            buffer = event.current_buffer
+            # atuin's widget only takes over for a single-line buffer; with a
+            # completion menu open or multiple lines, Up must still move around.
+            # This fallback is what prompt_toolkit's own "up" handler does.
+            if buffer.complete_state or "\n" in buffer.text:
+                buffer.auto_up(count=event.arg)
+                return
+            _logger.debug("Detected <up> key with atuin keys enabled.")
+            if not atuin.search_history(event, pgcli.atuin_author, up_key_binding=True):
+                buffer.auto_up(count=event.arg)
 
     @kb.add("f2")
     def _(event):
