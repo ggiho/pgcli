@@ -1584,6 +1584,13 @@ def cli(
         print("Version:", __version__)
         sys.exit(0)
 
+    # Redshift reports its client_encoding as "UNICODE", which is not a codec
+    # name Python knows, so psycopg fails to connect at all with "codec not
+    # available in Python: 'UNICODE'". Asking libpq for utf-8 up front means the
+    # server never answers with that name. setdefault so an explicit
+    # PGCLIENTENCODING still wins.
+    os.environ.setdefault("PGCLIENTENCODING", "utf-8")
+
     config_dir = os.path.dirname(config_location())
     if not os.path.exists(config_dir):
         os.makedirs(config_dir)
