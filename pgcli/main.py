@@ -71,6 +71,7 @@ from .config import (
 )
 from . import atuin
 from .atuin import AtuinHistory
+from .userinfo import list_users
 from .key_bindings import pgcli_bindings
 from .packages.formatter.sqlformatter import register_new_formatter
 from .packages.prompt_utils import confirm, confirm_destructive_query
@@ -380,6 +381,14 @@ class PGCli:
             "\\ne",
             "\\ne name",
             "Edit a named query in the external editor.",
+        )
+
+        self.pgspecial.register(
+            list_users,
+            "\\u",
+            "\\u [user]",
+            "List users, or show one user's attributes and privileges.",
+            case_sensitive=True,
         )
 
         self.pgspecial.register(
