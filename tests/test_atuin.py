@@ -82,20 +82,21 @@ def test_session_id_differs_from_myclis_scheme():
 
 
 def test_load_filters_by_author_newest_first_and_keeps_duplicates(fake_atuin):
-    fake = fake_atuin(stdout="SELECT 2\0SELECT 1\0SELECT 1\0")
+    fake = fake_atuin(stdout="SELECT 1\0SELECT 1\0SELECT 2\0")
     assert list(AtuinHistory().load_history_strings()) == ["SELECT 2", "SELECT 1", "SELECT 1"]
     argv = fake.calls[0]
     assert argv[:2] == ["atuin", "search"]
     assert argv[argv.index("--author") + 1] == "pgcli"
     # Duplicates drive frequency-based auto-suggest ranking.
     assert "--include-duplicates" in argv
-    # atuin prints oldest first; without --reverse the up-arrow order inverts.
-    assert "--reverse" in argv
+    # --reverse would make --limit pick the oldest entries; the order is flipped here instead.
+    assert "--reverse" not in argv
+    assert argv[argv.index("--limit") + 1] == "5000"
     assert "--cmd-only" in argv
 
 
 def test_load_preserves_multiline_entries(fake_atuin):
-    fake_atuin(stdout="SELECT a,\n       b\n  FROM t\0SELECT 1\0")
+    fake_atuin(stdout="SELECT 1\0SELECT a,\n       b\n  FROM t\0")
     assert list(AtuinHistory().load_history_strings()) == ["SELECT a,\n       b\n  FROM t", "SELECT 1"]
 
 

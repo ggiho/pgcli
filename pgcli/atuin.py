@@ -5,9 +5,11 @@ and filter mode match the user's shell.
 
 Behaviour of the atuin CLI that this relies on (verified against atuin 18.19):
 
-* ``atuin search`` prints **oldest first**; ``--reverse`` is what yields the
-  newest-first order :meth:`History.load_history_strings` must return. Its
-  ``--help`` describes the opposite.
+* ``atuin search --limit N`` picks the **newest** N entries and prints them
+  oldest first. ``--reverse`` does not just flip that output: it flips the
+  query, so with ``--limit`` it picks the *oldest* N (verified against atuin
+  18.23). The newest-first order :meth:`History.load_history_strings` must
+  return is therefore made here, by reversing the output.
 * ``--include-duplicates`` is required, because prompt_toolkit's
   history-based auto-suggest ranks by how often an entry appears.
 * ``history end`` is not called: it demands an exit code we do not have, since
@@ -90,7 +92,6 @@ class AtuinHistory(History):
             "--author",
             self.author,
             "--include-duplicates",
-            "--reverse",
             "--print0",
             "--cmd-only",
             "--limit",
@@ -101,7 +102,7 @@ class AtuinHistory(History):
             entries = []
         else:
             # --print0 terminates every record, so the trailing split is empty.
-            entries = [record for record in out.split("\0") if record]
+            entries = [record for record in out.split("\0") if record][::-1]
         if self.legacy is not None:
             entries.extend(self.legacy.load_history_strings())
         return entries
