@@ -72,6 +72,7 @@ from .config import (
 from . import atuin
 from .atuin import AtuinHistory
 from .userinfo import list_users
+from .grid import GRID_FORMATS, format_as_grid
 from .key_bindings import pgcli_bindings
 from .packages.formatter.sqlformatter import register_new_formatter
 from .packages.prompt_utils import confirm, confirm_destructive_query
@@ -122,7 +123,7 @@ MetaQuery.__new__.__defaults__ = ("", False, 0, 0, False, False, False, False)
 
 OutputSettings = namedtuple(
     "OutputSettings",
-    "table_format dcmlfmt floatfmt column_date_formats missingval expanded max_width case_function style_output max_field_width",
+    "table_format dcmlfmt floatfmt column_date_formats missingval expanded max_width case_function style_output max_field_width grid_width",
 )
 OutputSettings.__new__.__defaults__ = (
     None,
@@ -135,6 +136,7 @@ OutputSettings.__new__.__defaults__ = (
     lambda x: x,
     None,
     DEFAULT_MAX_FIELD_WIDTH,
+    None,
 )
 
 
@@ -1256,6 +1258,8 @@ class PGCli:
                 case_function=(self.completer.case if self.settings["case_column_headers"] else lambda x: x),
                 style_output=self.style_output,
                 max_field_width=self.max_field_width,
+                # \o sends this same output to a file, which keeps one value per line.
+                grid_width=(self.prompt_app.output.get_size().columns if self.prompt_app and not self.output_file else None),
             )
 
             # Hide query text for named queries in quiet mode
@@ -2001,7 +2005,10 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
 
     if cur:
         headers = [case_function(x) for x in headers]
-        if max_width is not None:
+        use_grid = (
+            settings.grid_width is not None and not explain_mode and not expanded and table_format in GRID_FORMATS and len(headers) == 1
+        )
+        if max_width is not None or use_grid:
             cur = list(cur)
         column_types = None
         if hasattr(cur, "description"):
@@ -2016,7 +2023,20 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
                 else:
                     column_types.append(str)
 
-        formatted = formatter.format_output(cur, headers, **output_kwargs)
+        grid = None
+        if use_grid:
+            grid = format_as_grid(
+                headers[0],
+                cur,
+                settings.grid_width,
+                settings.missingval,
+                style=settings.style_output,
+                table_format=table_format,
+            )
+        if grid is None:
+            formatted = formatter.format_output(cur, headers, **output_kwargs)
+        else:
+            formatted = iter(grid)
         if isinstance(formatted, str):
             formatted = iter(formatted.splitlines())
         first_line = next(formatted)
