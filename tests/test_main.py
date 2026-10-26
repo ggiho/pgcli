@@ -295,6 +295,15 @@ def test_pset_pager_always(term_height, term_width, text, pset_pager_mocks):
 pager_on_test_data = [l + (r,) for l, r in zip(test_data, use_pager_when_on)]
 
 
+def test_is_too_wide_measures_display_width(pset_pager_mocks):
+    cli, _, _, mock_cli = pset_pager_mocks
+    mock_cli.output.get_size.return_value = termsize(rows=24, columns=100)
+
+    # 60 Korean characters take 120 columns, though the string is 60 long.
+    assert cli.is_too_wide("가" * 60) is True
+    assert cli.is_too_wide("가" * 50) is False
+
+
 @pytest.mark.parametrize("term_height,term_width,text,use_pager", pager_on_test_data, ids=test_ids)
 def test_pset_pager_on(term_height, term_width, text, use_pager, pset_pager_mocks):
     cli, mock_echo, mock_echo_via_pager, mock_cli = pset_pager_mocks

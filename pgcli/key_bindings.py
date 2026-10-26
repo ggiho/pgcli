@@ -23,10 +23,11 @@ def pgcli_bindings(pgcli):
     tab_insert_text = " " * 4
 
     # Registered only when enabled, so the default Up binding is untouched
-    # otherwise. ~shift_selection_mode leaves shift-selection to prompt_toolkit.
+    # otherwise. ~shift_selection_mode leaves shift-selection to prompt_toolkit,
+    # and ~is_searching leaves Up in Ctrl-R search moving through its matches.
     if pgcli.atuin_keys and pgcli.atuin_history and atuin.is_available():
 
-        @kb.add("up", filter=~shift_selection_mode)
+        @kb.add("up", filter=~shift_selection_mode & ~is_searching)
         def _(event):
             """Open atuin's history UI, mirroring `atuin init zsh`'s up-arrow widget."""
             buffer = event.current_buffer
@@ -37,7 +38,7 @@ def pgcli_bindings(pgcli):
                 buffer.auto_up(count=event.arg)
                 return
             _logger.debug("Detected <up> key with atuin keys enabled.")
-            if not atuin.search_history(event, pgcli.atuin_author, up_key_binding=True):
+            if not atuin.search_history(event, pgcli.atuin_author):
                 buffer.auto_up(count=event.arg)
 
     @kb.add("f2")

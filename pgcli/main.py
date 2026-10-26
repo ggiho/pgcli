@@ -50,6 +50,7 @@ from prompt_toolkit.layout.processors import (
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.cursor_shapes import ModalCursorShapeConfig
+from prompt_toolkit.utils import get_cwidth
 from pygments.lexers.sql import PostgresLexer
 
 from pgspecial.main import PGSpecial, NO_QUERY, PAGER_OFF, PAGER_LONG_OUTPUT
@@ -388,8 +389,8 @@ class PGCli:
         self.pgspecial.register(
             list_users,
             "\\u",
-            "\\u [user]",
-            "List users, or show one user's attributes and privileges.",
+            "\\u[+] [user]",
+            "List users, or show one user's attributes and privileges. + adds descriptions.",
             case_sensitive=True,
         )
 
@@ -1041,6 +1042,12 @@ class PGCli:
 
         self.prompt_app = self._build_cli(history)
 
+        def end_history(success):
+            # atuin's entry was started when the prompt stored the line; finish
+            # it now that the outcome is known.
+            if isinstance(history, AtuinHistory):
+                history.end(success)
+
         if not self.less_chatty:
             print("Server: PostgreSQL", self.pgexecute.server_version)
             print("Version:", __version__)
@@ -1063,14 +1070,17 @@ class PGCli:
                     logger.error("sql: %r, error: %r", text, e)
                     logger.error("traceback: %r", traceback.format_exc())
                     click.secho(str(e), err=True, fg="red")
+                    end_history(False)
                     continue
 
                 try:
                     self.handle_watch_command(text)
                 except PgCliQuitError:
+                    end_history(True)
                     if not self._check_ongoing_transaction_and_allow_quitting():
                         continue
                     raise
+                end_history(self.query_history[-1].successful)
 
                 self.now = dt.datetime.today()
 
@@ -1258,8 +1268,10 @@ class PGCli:
                 case_function=(self.completer.case if self.settings["case_column_headers"] else lambda x: x),
                 style_output=self.style_output,
                 max_field_width=self.max_field_width,
-                # \o sends this same output to a file, which keeps one value per line.
-                grid_width=(self.prompt_app.output.get_size().columns if self.prompt_app and not self.output_file else None),
+                # \o and \log-file write this same output to a file, which keeps one value per line.
+                grid_width=(
+                    self.prompt_app.output.get_size().columns if self.prompt_app and not self.output_file and not self.log_file else None
+                ),
             )
 
             # Hide query text for named queries in quiet mode
@@ -1407,7 +1419,8 @@ class PGCli:
         """Will this line be too wide to fit into terminal?"""
         if not self.prompt_app:
             return False
-        return len(COLOR_CODE_REGEX.sub("", line)) > self.prompt_app.output.get_size().columns
+        # Display width, since East Asian wide characters take two columns each.
+        return get_cwidth(COLOR_CODE_REGEX.sub("", line)) > self.prompt_app.output.get_size().columns
 
     def is_too_tall(self, lines):
         """Are there too many lines to fit into terminal?"""
@@ -1596,13 +1609,6 @@ def cli(
     if version:
         print("Version:", __version__)
         sys.exit(0)
-
-    # Redshift reports its client_encoding as "UNICODE", which is not a codec
-    # name Python knows, so psycopg fails to connect at all with "codec not
-    # available in Python: 'UNICODE'". Asking libpq for utf-8 up front means the
-    # server never answers with that name. setdefault so an explicit
-    # PGCLIENTENCODING still wins.
-    os.environ.setdefault("PGCLIENTENCODING", "utf-8")
 
     config_dir = os.path.dirname(config_location())
     if not os.path.exists(config_dir):
@@ -1964,12 +1970,12 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
 
         return data, headers
 
-    def format_status(cur, status):
+    def format_status(rowcount, status):
         # redshift does not return rowcount as part of status.
         # See https://github.com/dbcli/pgcli/issues/1320
-        if cur and hasattr(cur, "rowcount") and cur.rowcount is not None:
-            if status and not status.endswith(str(cur.rowcount)):
-                status += " %s" % cur.rowcount
+        if rowcount is not None:
+            if status and not status.endswith(str(rowcount)):
+                status += " %s" % rowcount
         return status
 
     output_kwargs = {
@@ -2003,10 +2009,19 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
     if title:  # Only print the title if it's not None.
         output.append(title)
 
+    # Taken before cur may be turned into a list, which has no rowcount.
+    rowcount = getattr(cur, "rowcount", None) if cur else None
+
     if cur:
         headers = [case_function(x) for x in headers]
         use_grid = (
-            settings.grid_width is not None and not explain_mode and not expanded and table_format in GRID_FORMATS and len(headers) == 1
+            settings.grid_width is not None
+            and not explain_mode
+            and not expanded
+            and table_format in GRID_FORMATS
+            and len(headers) == 1
+            # A typed EXPLAIN's plan is a tree, one node per line.
+            and headers[0].lower() != "query plan"
         )
         if max_width is not None or use_grid:
             cur = list(cur)
@@ -2056,7 +2071,7 @@ def format_output(title, cur, headers, status, settings, explain_mode=False):
 
     # Only print the status if it's not None
     if status:
-        output = itertools.chain(output, [format_status(cur, status)])
+        output = itertools.chain(output, [format_status(rowcount, status)])
 
     return output
 

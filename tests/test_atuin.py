@@ -8,7 +8,8 @@ from pgcli.atuin import ACCEPT_PREFIX, AtuinHistory, search_history, session_id
 class FakeAtuin:
     """Stands in for the atuin executable, recording argv and replaying stdout.
 
-    `--cmd-only` searches and the interactive picker get separate canned output.
+    Stands in for both subprocess.run and subprocess.Popen; `history end` is the
+    only Popen, and its result is not used.
     """
 
     def __init__(self, stdout="", stderr="", returncode=0, raises=None):
@@ -35,6 +36,7 @@ def fake_atuin(monkeypatch):
     def install(**kwargs):
         fake = FakeAtuin(**kwargs)
         monkeypatch.setattr(subprocess, "run", fake)
+        monkeypatch.setattr(subprocess, "Popen", fake)
         return fake
 
     return install
@@ -87,6 +89,8 @@ def test_load_filters_by_author_newest_first_and_keeps_duplicates(fake_atuin):
     argv = fake.calls[0]
     assert argv[:2] == ["atuin", "search"]
     assert argv[argv.index("--author") + 1] == "pgcli"
+    # Not the user's filter_mode, which could scope it to one host or directory.
+    assert argv[argv.index("--filter-mode") + 1] == "global"
     # Duplicates drive frequency-based auto-suggest ranking.
     assert "--include-duplicates" in argv
     # --reverse would make --limit pick the oldest entries; the order is flipped here instead.
@@ -103,11 +107,40 @@ def test_load_preserves_multiline_entries(fake_atuin):
 def test_store_records_with_author_and_no_fake_exit(fake_atuin):
     fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
     AtuinHistory(author="pgcli-test").store_string("SELECT 1")
-    assert fake.calls == [["atuin", "history", "start", "--author", "pgcli-test", "SELECT 1"]]
+    assert fake.calls == [["atuin", "history", "start", "--author", "pgcli-test", "--", "SELECT 1"]]
     # `history end` needs an exit code we cannot know at store time.
     assert not any("end" in call for call in fake.calls)
     # Recording and the picker must agree on the session.
     assert fake.env["ATUIN_SESSION"] == session_id("pgcli-test")
+
+
+def test_store_keeps_sql_that_starts_with_a_dash(fake_atuin):
+    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    AtuinHistory().store_string("-- note\nSELECT 1")
+    # Without "--" atuin rejects this as an unknown option.
+    assert fake.calls[0][-2:] == ["--", "-- note\nSELECT 1"]
+
+
+@pytest.mark.parametrize(("success", "exit_code"), [(True, "0"), (False, "1")])
+def test_end_finishes_the_stored_entry_with_its_outcome(fake_atuin, success, exit_code):
+    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    history = AtuinHistory()
+    history.store_string("SELECT 1")
+    history.end(success)
+    assert fake.calls[1] == ["atuin", "history", "end", "--exit", exit_code, "--", "01a040f0cb257242b718f2ab411b84ce"]
+    # Not waited for, since it may sync.
+    assert fake.kwargs["start_new_session"] is True
+
+    history.end(success)  # nothing is pending any more
+    assert len(fake.calls) == 2
+
+
+def test_no_end_when_start_fails(fake_atuin):
+    fake = fake_atuin(returncode=1)
+    history = AtuinHistory()
+    history.store_string("SELECT 1")
+    history.end(True)
+    assert len(fake.calls) == 1
 
 
 def test_legacy_entries_are_appended_not_imported(fake_atuin):
@@ -141,7 +174,7 @@ def test_survives_a_missing_or_wedged_executable(fake_atuin):
 def test_picker_seeds_the_query_and_keeps_stdout_on_the_terminal(fake_atuin):
     fake = fake_atuin(stderr="SELECT 1\n")
     buffer = FakeBuffer("SEL")
-    assert search_history(FakeEvent(buffer), "pgcli", up_key_binding=True) is True
+    assert search_history(FakeEvent(buffer), "pgcli") is True
 
     argv = fake.calls[0]
     assert argv[:3] == ["atuin", "search", "-i"]
@@ -151,6 +184,8 @@ def test_picker_seeds_the_query_and_keeps_stdout_on_the_terminal(fake_atuin):
     assert "--author" not in argv
     assert fake.env["ATUIN_SESSION"] == session_id("pgcli")
     assert fake.env["ATUIN_QUERY"] == "SEL"
+    # Opened from the up-arrow, atuin takes this over --filter-mode.
+    assert fake.env["ATUIN_FILTER_MODE_SHELL_UP_KEY_BINDING"] == "session"
     # The TUI draws on stdout; only the pick is captured.
     assert fake.kwargs["stdout"] is None
     assert fake.kwargs["stderr"] is subprocess.PIPE
@@ -182,6 +217,14 @@ def test_reports_failure_so_the_caller_can_fall_back(fake_atuin):
     assert buffer.text == "SELECT 1"
 
 
+def test_error_exit_is_a_failure_not_a_pick(fake_atuin):
+    fake_atuin(stderr="Error: unexpected argument\n", returncode=2)
+    buffer = FakeBuffer("SELECT 1")
+    assert search_history(FakeEvent(buffer), "pgcli") is False
+    assert buffer.text == "SELECT 1"
+    assert buffer.accepted is False
+
+
 def _up_bindings(cli):
     from pgcli.key_bindings import pgcli_bindings
 
@@ -200,7 +243,7 @@ def test_shipped_default_leaves_atuin_off():
 def test_up_is_not_rebound_unless_enabled():
     from pgcli.main import PGCli
 
-    # Set explicitly: PGCli() reads the real user config, which may enable these.
+    # Set explicitly, so this does not depend on the shipped default.
     cli = PGCli()
     cli.atuin_keys = False
     cli.atuin_history = False
@@ -218,6 +261,27 @@ def test_up_is_rebound_when_enabled(monkeypatch):
     assert len(_up_bindings(cli)) == 1
 
 
+@pytest.mark.parametrize(("searching", "active"), [(False, True), (True, False)])
+def test_up_is_left_to_reverse_search_while_searching(monkeypatch, searching, active):
+    """In Ctrl-R search, Up must not open atuin and paste into the search box."""
+    from types import SimpleNamespace
+
+    from prompt_toolkit.application.current import set_app
+
+    from pgcli import atuin as atuin_module
+    from pgcli.main import PGCli
+
+    monkeypatch.setattr(atuin_module, "is_available", lambda: True)
+    cli = PGCli()
+    cli.atuin_keys = True
+    cli.atuin_history = True
+    [binding] = _up_bindings(cli)
+
+    app = SimpleNamespace(layout=SimpleNamespace(is_searching=searching), current_buffer=SimpleNamespace(selection_state=None))
+    with set_app(app):
+        assert binding.filter() is active
+
+
 def test_up_not_rebound_when_atuin_history_is_off(monkeypatch):
     """atuin's picker would show an empty list, so the key must stay on history."""
     from pgcli import atuin as atuin_module
@@ -228,3 +292,40 @@ def test_up_not_rebound_when_atuin_history_is_off(monkeypatch):
     cli.atuin_keys = True
     cli.atuin_history = False
     assert _up_bindings(cli) == []
+
+
+def test_run_cli_ends_each_entry_with_its_querys_outcome(monkeypatch, fake_atuin):
+    from pgcli import atuin as atuin_module
+    from pgcli.main import MetaQuery, PGCli, PgCliQuitError
+
+    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    monkeypatch.setattr(atuin_module, "is_available", lambda: True)
+    cli = PGCli()
+    cli.atuin_history = True
+    cli.less_chatty = True
+
+    class FakePrompt:
+        def __init__(self, history):
+            self.history = history
+            self.texts = ["SELECT 1", "SELECT bad", "\\q"]
+
+        def prompt(self):
+            if not self.texts:
+                raise EOFError
+            # prompt_toolkit stores the line on accept, before it is run.
+            self.history.append_string(self.texts[0])
+            return self.texts.pop(0)
+
+    def execute_command(text):
+        if text == "\\q":
+            raise PgCliQuitError
+        return MetaQuery(query=text, successful=text == "SELECT 1")
+
+    monkeypatch.setattr(cli, "refresh_completions", lambda **kwargs: None)
+    monkeypatch.setattr(cli, "_build_cli", FakePrompt)
+    monkeypatch.setattr(cli, "execute_command", execute_command)
+    monkeypatch.setattr(cli, "_check_ongoing_transaction_and_allow_quitting", lambda: True)
+    cli.run_cli()
+
+    ends = [call[call.index("--exit") + 1] for call in fake.calls if call[1:3] == ["history", "end"]]
+    assert ends == ["0", "1", "0"]

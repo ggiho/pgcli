@@ -3,22 +3,24 @@
 The picker invocation mirrors what ``atuin init zsh`` generates, so the UI, keys
 and filter mode match the user's shell.
 
-Behaviour of the atuin CLI that this relies on (verified against atuin 18.19):
+Behaviour of the atuin CLI that this relies on (verified against atuin 18.24):
 
 * ``atuin search --limit N`` picks the **newest** N entries and prints them
   oldest first. ``--reverse`` does not just flip that output: it flips the
-  query, so with ``--limit`` it picks the *oldest* N (verified against atuin
-  18.23). The newest-first order :meth:`History.load_history_strings` must
-  return is therefore made here, by reversing the output.
+  query, so with ``--limit`` it picks the *oldest* N. The newest-first order
+  :meth:`History.load_history_strings` must return is therefore made here, by
+  reversing the output.
 * ``--include-duplicates`` is required, because prompt_toolkit's
   history-based auto-suggest ranks by how often an entry appears.
-* ``history end`` is not called: it demands an exit code we do not have, since
-  prompt_toolkit stores the line on accept, before the query runs. atuin leaves
-  such entries at ``exit=-1``, which is the honest value.
+* An entry only reaches the record store (and so sync) once ``history end``
+  finishes it. prompt_toolkit stores the line on accept, before the query
+  runs, so :meth:`AtuinHistory.end` is called by pgcli afterwards with the
+  outcome. Like the zsh hook it runs in the background, since it may sync.
 * The interactive picker ignores ``--author`` and ``--cwd`` but does honour
   ``--filter-mode session``, so entries are recorded under one deterministic
   synthetic session. Without this the picker would offer shell commands, which
-  ``enter_accept`` would then run as SQL.
+  ``enter_accept`` would then run as SQL. Opened from the up-arrow, it uses
+  ``filter_mode_shell_up_key_binding`` instead, so that is forced too.
 * atuin draws its TUI on **stdout** and prints the chosen command on
   **stderr** (which is why the zsh widget swaps the two with ``3>&1 1>&2 2>&3``).
 * ``ATUIN_QUERY`` seeds the search box with the current buffer.
@@ -73,6 +75,8 @@ class AtuinHistory(History):
         self.author = author
         self.limit = limit
         self.legacy = legacy
+        # id of the entry store_string started and end has not yet finished.
+        self._pending_id = None
 
     def _atuin(self, *args: str, env: Optional[dict] = None) -> Optional[str]:
         """Run atuin and return stdout, or None if it could not be run."""
@@ -91,6 +95,10 @@ class AtuinHistory(History):
             "search",
             "--author",
             self.author,
+            # The user's filter_mode would otherwise scope this to one host,
+            # directory or session.
+            "--filter-mode",
+            "global",
             "--include-duplicates",
             "--print0",
             "--cmd-only",
@@ -108,35 +116,61 @@ class AtuinHistory(History):
         return entries
 
     def store_string(self, string: str) -> None:
-        self._atuin(
+        # "--" so SQL starting with "-- comment" is not taken for an option.
+        out = self._atuin(
             "history",
             "start",
             "--author",
             self.author,
+            "--",
             string,
             env=dict(os.environ, ATUIN_SESSION=session_id(self.author)),
         )
+        self._pending_id = out.strip() if out else None
+
+    def end(self, success: bool) -> None:
+        """Finish the entry stored last with the outcome of the query it ran.
+
+        Does nothing if nothing is pending, e.g. prompt_toolkit skipped storing a
+        repeat of the previous entry, or ``history start`` failed.
+        """
+        history_id, self._pending_id = self._pending_id, None
+        if not history_id:
+            return
+        try:
+            # Not waited for: like the zsh hook's `( ... &)`, since it may sync.
+            # Its own session, so a Ctrl-C at the prompt cannot cut that short.
+            subprocess.Popen(
+                ("atuin", "history", "end", "--exit", "0" if success else "1", "--", history_id),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as e:
+            logger.debug("atuin history end failed: %s", e)
 
 
-def search_history(event: KeyPressEvent, author: str, up_key_binding: bool = False) -> bool:
-    """Let atuin pick a history entry and put it in the buffer.
+def search_history(event: KeyPressEvent, author: str) -> bool:
+    """Let atuin pick a history entry and put it in the buffer, as its up-arrow widget does.
 
-    Returns False if atuin could not be run, so the caller can fall back.
+    Returns False if atuin could not be run or failed, so the caller can fall back.
     """
     buffer = event.current_buffer
 
     # --author is silently ignored here, so scope via the synthetic session.
-    args = ["atuin", "search", "-i", "--filter-mode", "session"]
-    if up_key_binding:
-        # Tells atuin it was opened from the up-arrow, which it treats
-        # differently from ctrl-r (see atuin's shell integration).
-        args.append("--shell-up-key-binding")
+    # --shell-up-key-binding tells atuin it was opened from the up-arrow, which
+    # it treats differently from ctrl-r (see atuin's shell integration).
+    args = ["atuin", "search", "-i", "--filter-mode", "session", "--shell-up-key-binding"]
 
     env = dict(
         os.environ,
         ATUIN_SHELL="zsh",
         ATUIN_QUERY=buffer.text,
         ATUIN_SESSION=session_id(author),
+        # With --shell-up-key-binding this setting beats --filter-mode, so a
+        # user's value could otherwise bring shell commands into the picker.
+        ATUIN_FILTER_MODE_SHELL_UP_KEY_BINDING="session",
     )
 
     try:
@@ -150,6 +184,11 @@ def search_history(event: KeyPressEvent, author: str, up_key_binding: bool = Fal
     # Redraw: atuin left the alternate screen and prompt_toolkit does not know.
     event.app.renderer.reset()
     event.app.invalidate()
+
+    if proc.returncode != 0:
+        # stderr is then an error message, not a pick.
+        logger.debug("atuin search exited %s: %s", proc.returncode, proc.stderr.strip())
+        return False
 
     pick = proc.stderr.strip()
     if not pick:

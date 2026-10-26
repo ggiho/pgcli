@@ -1,6 +1,7 @@
 """Lay out a single-column result like ``ls -C``, in a frame that matches the table format.
 
-Mirrors the fork's mycli grid. Only text and NULL values are laid out: numbers,
+Mirrors the fork's mycli grid. Only boxed table formats get it, since the grid
+is always drawn in a frame. Only text and NULL values are laid out: numbers,
 dates and arrays go through pgcli's formatting settings (decimal_format,
 column_date_formats, array braces) in the table path, so those keep the table.
 """
@@ -9,22 +10,16 @@ from cli_helpers.utils import filter_style_table, style_field
 from prompt_toolkit.utils import get_cwidth
 from pygments.token import Token
 
-# Table formats whose single-column results may be laid out as a grid.
-# Data formats (csv, tsv, jsonl, ...) keep one value per line.
+# Boxed table formats, whose single-column results may be laid out as a grid.
+# Borderless (plain, simple, minimal, ...), markup (github, pipe, rst, orgtbl)
+# and data formats (csv, tsv, jsonl, ...) keep one value per line.
 GRID_FORMATS = frozenset({
     "ascii",
     "ascii_escaped",
-    "plain",
-    "simple",
-    "minimal",
     "grid",
     "fancy_grid",
-    "pipe",
-    "orgtbl",
     "psql",
     "psql_unicode",
-    "rst",
-    "github",
     "double",
     "mysql",
     "mysql_unicode",

@@ -2,8 +2,11 @@
 
 Mirrors the fork's mycli ``\\u``. With no argument it is pgspecial's ``\\du``.
 With a name it looks the role up by exact name, not a ``\\du`` pattern, and also
-lists the privileges granted to it directly, one row per object. An owner's
+lists the privileges granted to it directly, one row per object. The name is
+read as an identifier: folded to lowercase unless double-quoted. An owner's
 entry in its own object's ACL is left out, since that is ownership, not a grant.
+``\\u+`` adds the role's description on PostgreSQL, as ``\\du+`` does; Redshift
+has no role descriptions.
 
 Redshift is detected the way pgspecial does it, by its 8.0.2 server version. It
 has neither ``aclexplode`` nor a usable ``pg_roles``, so it reads users from
@@ -14,6 +17,7 @@ pg_user_has_admin_option", so privileges are grouped per object here instead.
 """
 
 import logging
+import string
 
 import psycopg
 from psycopg.sql import SQL, Literal
@@ -30,6 +34,7 @@ _PG_ROLE_QUERY = SQL(
         ARRAY(SELECT b.rolname FROM pg_catalog.pg_auth_members m
               JOIN pg_catalog.pg_roles b ON m.roleid = b.oid
               WHERE m.member = r.oid ORDER BY 1) AS member_of
+        {verbose}
     FROM pg_catalog.pg_roles r
     WHERE r.rolname = {name}
     """
@@ -53,6 +58,29 @@ _PG_PRIVILEGES_QUERY = SQL(
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
         aclexplode(c.relacl) a
     WHERE a.grantee = {oid} AND a.grantee <> c.relowner
+    UNION ALL
+    SELECT 'column', n.nspname, c.relname || '.' || att.attname, a.privilege_type
+    FROM pg_catalog.pg_attribute att
+    JOIN pg_catalog.pg_class c ON c.oid = att.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
+        aclexplode(att.attacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> c.relowner AND NOT att.attisdropped
+    UNION ALL
+    SELECT CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate'
+                          ELSE 'function' END,
+        n.nspname, p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
+        a.privilege_type
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace,
+        aclexplode(p.proacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> p.proowner
+    UNION ALL
+    SELECT CASE t.typtype WHEN 'd' THEN 'domain' ELSE 'type' END,
+        n.nspname, t.typname, a.privilege_type
+    FROM pg_catalog.pg_type t
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace,
+        aclexplode(t.typacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> t.typowner
     """
 )
 
@@ -67,20 +95,24 @@ _REDSHIFT_USER_QUERY = SQL(
     """
 )
 
+# identity_type ('user', 'role', 'group', 'public') keeps a user and a
+# same-named role or group apart.
 _REDSHIFT_PRIVILEGES_QUERY = SQL(
     """
     SELECT 'database', NULL, database_name, privilege_type
-    FROM svv_database_privileges WHERE identity_name = {name}
+    FROM svv_database_privileges WHERE identity_name = {name} AND identity_type = {type}
     UNION ALL
     SELECT 'schema', namespace_name, NULL, privilege_type
-    FROM svv_schema_privileges WHERE identity_name = {name}
+    FROM svv_schema_privileges WHERE identity_name = {name} AND identity_type = {type}
     UNION ALL
     SELECT 'relation', namespace_name, relation_name, privilege_type
-    FROM svv_relation_privileges WHERE identity_name = {name}
+    FROM svv_relation_privileges WHERE identity_name = {name} AND identity_type = {type}
     """
 )
 
 _TYPE_ORDER = {"database": 0, "schema": 1}
+
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 
 
 def _is_redshift(cur):
@@ -103,8 +135,24 @@ def _group_privileges(rows):
     return [(*key, ", ".join(sorted(grouped[key]))) for key in keys]
 
 
-def _pg_role(cur, name):
-    headers, rows = _fetch(cur, _PG_ROLE_QUERY.format(name=Literal(name)))
+def _role_name(arg):
+    """The role *arg* names, read like an identifier in SQL.
+
+    Unquoted, it is folded to lowercase as the server folds identifiers (ASCII
+    letters only, as PostgreSQL does); double-quoted, it keeps its case. Single
+    quotes are only stripped, as psql does for a backslash command's argument.
+    """
+    name = arg.strip()
+    if len(name) >= 2 and name[0] == name[-1] == "'":
+        name = name[1:-1]
+    if len(name) >= 2 and name[0] == name[-1] == '"':
+        return name[1:-1].replace('""', '"')
+    return name.translate(_ASCII_LOWER)
+
+
+def _pg_role(cur, name, verbose):
+    verbose_columns = SQL(", pg_catalog.shobj_description(r.oid, 'pg_authid') AS description" if verbose else "")
+    headers, rows = _fetch(cur, _PG_ROLE_QUERY.format(name=Literal(name), verbose=verbose_columns))
     if not rows:
         return None, None
     oid = rows[0][0]
@@ -112,9 +160,10 @@ def _pg_role(cur, name):
     return (headers[1:], [row[1:] for row in rows]), _PG_PRIVILEGES_QUERY.format(oid=Literal(oid))
 
 
-def _redshift_role(cur, name):
+def _redshift_role(cur, name, verbose):
     headers, rows = _fetch(cur, _REDSHIFT_USER_QUERY.format(name=Literal(name)))
     if rows:
+        identity_type = "user"
         _, roles = _fetch(cur, SQL("SELECT role_name FROM svv_user_grants WHERE user_name = {name}").format(name=Literal(name)))
         headers = headers + ["roles"]
         rows = [(*rows[0], sorted(r[0] for r in roles))]
@@ -123,12 +172,13 @@ def _redshift_role(cur, name):
         _, roles = _fetch(cur, SQL("SELECT role_name FROM svv_roles WHERE role_name = {name}").format(name=Literal(name)))
         if not roles:
             return None, None
+        identity_type = "role"
         headers, rows = ["rolname", "type"], [(name, "role")]
-    return (headers, rows), _REDSHIFT_PRIVILEGES_QUERY.format(name=Literal(name))
+    return (headers, rows), _REDSHIFT_PRIVILEGES_QUERY.format(name=Literal(name), type=Literal(identity_type))
 
 
-def _show_role(cur, name):
-    role, privileges_query = (_redshift_role if _is_redshift(cur) else _pg_role)(cur, name)
+def _show_role(cur, name, verbose):
+    role, privileges_query = (_redshift_role if _is_redshift(cur) else _pg_role)(cur, name, verbose)
     if role is None:
         return [(None, None, None, f"No such user: {name}")]
 
@@ -147,7 +197,7 @@ def _show_role(cur, name):
 
 
 def list_users(cur, pattern, verbose):
-    name = pattern.strip().strip("'\"")
+    name = _role_name(pattern)
     if name:
-        return _show_role(cur, name)
+        return _show_role(cur, name, verbose)
     return list_roles(cur, "", verbose)

@@ -1,11 +1,25 @@
+from collections import namedtuple
+from unittest import mock
+
 import pytest
 from cli_helpers.utils import strip_ansi
 from prompt_toolkit.utils import get_cwidth
 from pygments.style import Style
 from pygments.token import Token
 
-from pgcli.grid import format_as_grid
-from pgcli.main import OutputSettings, format_output
+from pgcli.grid import GRID_FORMATS, format_as_grid
+from pgcli.main import OutputSettings, PGCli, format_output
+
+
+class FakeCursor:
+    """Rows plus the rowcount a psycopg cursor carries, without a server."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.rowcount = len(rows)
+
+    def __iter__(self):
+        return iter(self.rows)
 
 
 def test_format_as_grid_fills_columns_top_to_bottom_like_ls():
@@ -100,3 +114,55 @@ def test_format_output_keeps_table_for_more_than_one_column():
     settings = OutputSettings(table_format="psql", dcmlfmt="d", floatfmt="g", grid_width=80)
 
     assert list(format_output(None, [("a", "b")], ["h1", "h2"], None, settings))[2] == "|----+----|"
+
+
+@pytest.mark.parametrize("table_format", sorted(GRID_FORMATS))
+def test_format_output_lays_out_grid_for_boxed_formats(table_format):
+    settings = OutputSettings(table_format=table_format, dcmlfmt="d", floatfmt="g", grid_width=80)
+
+    assert any("a  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
+
+
+@pytest.mark.parametrize("table_format", ["plain", "simple", "minimal", "github", "pipe", "rst", "orgtbl"])
+def test_format_output_keeps_table_for_formats_without_a_box(table_format):
+    settings = OutputSettings(table_format=table_format, dcmlfmt="d", floatfmt="g", grid_width=80)
+
+    assert not any("a  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
+
+
+@pytest.mark.parametrize("header", ["QUERY PLAN", "query plan"])
+def test_format_output_keeps_a_typed_explain_one_node_per_line(header):
+    settings = OutputSettings(table_format="psql", dcmlfmt="d", floatfmt="g", grid_width=80)
+    plan = [("Seq Scan on t  (cost=0.00..1.01 rows=1 width=4)",), ("  Filter: (a = 1)",)]
+
+    lines = list(format_output(None, plan, [header], "EXPLAIN", settings))
+
+    assert lines[3:5] == ["| Seq Scan on t  (cost=0.00..1.01 rows=1 width=4) |", "|   Filter: (a = 1)                               |"]
+
+
+@pytest.mark.parametrize("rows", [[("a",), ("b",), ("c",)], [(1,), (2,), (3,)]], ids=["grid", "grid declined"])
+def test_format_output_keeps_the_row_count_redshift_leaves_out_of_the_status(rows):
+    settings = OutputSettings(table_format="psql", dcmlfmt="d", floatfmt="g", grid_width=80)
+
+    assert list(format_output(None, FakeCursor(rows), ["name"], "SELECT", settings))[-1] == "SELECT 3"
+
+
+termsize = namedtuple("termsize", ["rows", "columns"])
+
+
+def test_grid_is_off_while_a_log_file_is_written(tmp_path):
+    """\\log-file gets the same output as the screen, and a file keeps one value per line."""
+    cli = PGCli()
+    cli.prompt_app = mock.Mock()
+    cli.prompt_app.output.get_size.return_value = termsize(rows=24, columns=80)
+    cli.pgexecute = mock.Mock()
+    cli.pgexecute.run.side_effect = lambda *args, **kwargs: [
+        (None, FakeCursor([("a",), ("b",), ("c",)]), ["name"], "SELECT 3", "SELECT", True, False)
+    ]
+
+    output, _ = cli._evaluate_command("SELECT")
+    assert "| a  b  c |" in output
+
+    cli.log_file = str(tmp_path / "pgcli.log")
+    output, _ = cli._evaluate_command("SELECT")
+    assert "| a  b  c |" not in output
