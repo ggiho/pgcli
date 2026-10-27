@@ -29,12 +29,14 @@ Behaviour of the atuin CLI that this relies on (verified against atuin 18.24):
 import hashlib
 import logging
 import os
+import re
 from shutil import which
 import subprocess
 from typing import Iterable, Optional
 
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
+import sqlparse
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,24 @@ ACCEPT_PREFIX = "__atuin_accept__:"
 
 def is_available() -> bool:
     return which("atuin") is not None
+
+
+# CREATE/ALTER ROLE/USER/GROUP with a PASSWORD clause, after any leading comments.
+_PASSWORD_STATEMENT = re.compile(r"(create|alter)\s+(role|user|group)\b.*\bpassword\b", re.IGNORECASE | re.DOTALL)
+
+
+def carries_password(text: str) -> bool:
+    """Whether any statement in *text* sets a password, or is ``\\password``.
+
+    Those must not reach atuin, which shows them in the shell's search and syncs
+    them. Any PASSWORD clause counts, ``PASSWORD NULL`` included: it holds no
+    secret, but is not worth telling apart.
+    """
+    for statement in sqlparse.split(text):
+        statement = sqlparse.format(statement, strip_comments=True).strip()
+        if statement.startswith("\\password") or _PASSWORD_STATEMENT.match(statement):
+            return True
+    return False
 
 
 def session_id(author: str) -> str:
@@ -116,6 +136,12 @@ class AtuinHistory(History):
         return entries
 
     def store_string(self, string: str) -> None:
+        # An entry still pending was not run by run_cli: \e stores its own
+        # line, then prompts for the edited SQL, which is stored in turn.
+        self.end(True)
+        if carries_password(string):
+            logger.debug("not storing a statement that sets a password in atuin")
+            return
         # "--" so SQL starting with "-- comment" is not taken for an option.
         out = self._atuin(
             "history",

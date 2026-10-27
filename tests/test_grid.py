@@ -7,7 +7,7 @@ from prompt_toolkit.utils import get_cwidth
 from pygments.style import Style
 from pygments.token import Token
 
-from pgcli.grid import GRID_FORMATS, format_as_grid
+from pgcli.grid import format_as_grid
 from pgcli.main import OutputSettings, PGCli, format_output
 
 
@@ -83,10 +83,31 @@ def test_format_as_grid_measures_wide_characters():
 
 @pytest.mark.parametrize(
     "rows",
-    [[(1,), (2,)], [(["a"],), ("b",)], [("a\nb",), ("c",)], [("a\tb",), ("c",)], [("only",)], [("x" * 80,), ("y",)]],
+    [
+        [(1,), (2,)],
+        [(["a"],), ("b",)],
+        [("a\nb",), ("c",)],
+        [("a\tb",), ("c",)],
+        [("only",)],
+        [("x" * 80,), ("y",)],
+        # The grid's own spacing would hide these.
+        [("",), ("b",)],
+        [(" a",), ("b",)],
+        [("a ",), ("b",)],
+        [("a  b",), ("c",)],
+    ],
 )
 def test_format_as_grid_returns_none_for_values_it_cannot_lay_out(rows):
     assert format_as_grid("h", rows, 80, "<null>") is None
+
+
+@pytest.mark.parametrize("missing_value", ["", " ", "a  b"])
+def test_format_as_grid_returns_none_when_the_null_string_would_be_misread(missing_value):
+    assert format_as_grid("h", [("a",), (None,)], 80, missing_value) is None
+
+
+def test_format_as_grid_keeps_single_spaces_inside_values():
+    assert format_as_grid("h", [("a b",), ("c",)], 80, "<null>")[3] == "| a b  c |"
 
 
 def test_format_output_lays_out_single_column_as_grid_when_width_is_given():
@@ -116,7 +137,10 @@ def test_format_output_keeps_table_for_more_than_one_column():
     assert list(format_output(None, [("a", "b")], ["h1", "h2"], None, settings))[2] == "|----+----|"
 
 
-@pytest.mark.parametrize("table_format", sorted(GRID_FORMATS))
+@pytest.mark.parametrize(
+    "table_format",
+    ["ascii", "ascii_escaped", "grid", "fancy_grid", "psql", "psql_unicode", "double", "mysql", "mysql_unicode", "mysql_heavy"],
+)
 def test_format_output_lays_out_grid_for_boxed_formats(table_format):
     settings = OutputSettings(table_format=table_format, dcmlfmt="d", floatfmt="g", grid_width=80)
 
@@ -166,3 +190,26 @@ def test_grid_is_off_while_a_log_file_is_written(tmp_path):
     cli.log_file = str(tmp_path / "pgcli.log")
     output, _ = cli._evaluate_command("SELECT")
     assert "| a  b  c |" not in output
+
+
+def test_grid_output_false_keeps_the_table():
+    cli = PGCli()
+    assert cli.grid_output is True  # the shipped default
+    cli.prompt_app = mock.Mock()
+    cli.prompt_app.output.get_size.return_value = termsize(rows=24, columns=80)
+    cli.pgexecute = mock.Mock()
+    cli.pgexecute.run.side_effect = lambda *args, **kwargs: [
+        (None, FakeCursor([("a",), ("b",), ("c",)]), ["name"], "SELECT 3", "SELECT", True, False)
+    ]
+
+    cli.grid_output = False
+    output, _ = cli._evaluate_command("SELECT")
+    assert "| a  b  c |" not in output
+    assert "| a    |" in output
+
+
+def test_grid_output_is_read_from_the_config(tmp_path):
+    rc = tmp_path / "pgclirc"
+    rc.write_text("[main]\ngrid_output = False\n")
+
+    assert PGCli(pgclirc_file=str(rc)).grid_output is False

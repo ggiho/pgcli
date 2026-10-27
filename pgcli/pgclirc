@@ -97,7 +97,10 @@ case_column_headers = True
 history_file = default
 
 # Store query history in atuin instead of history_file, tagged with atuin_author
-# so it stays separable from shell history (atuin search --author pgcli).
+# (atuin search --author pgcli). The entries are ordinary atuin history: the
+# shell's atuin search (Ctrl-R) shows them, and they are synced if you use atuin
+# sync. Statements that set a password (CREATE/ALTER ROLE ... PASSWORD,
+# \password) are not stored in atuin.
 # Queries already in history_file remain readable; they are not imported.
 # Falls back to history_file if the atuin executable is missing.
 atuin_history = False
@@ -170,6 +173,11 @@ on_error = STOP
 
 # Set threshold for row limit. Use 0 to disable limiting.
 row_limit = 1000
+
+# Lay out a single-column result like `ls -C`, several values per line, when the
+# table format is boxed (psql, grid, ascii, ...). Only on screen, and only for
+# text values that the layout cannot misrepresent; anything else keeps the table.
+grid_output = True
 
 # Truncate long text fields to this value for tabular display (does not apply to csv).
 # Leave unset to disable truncation. Example: "max_field_width = "

@@ -1,3 +1,27 @@
+Upcoming (TBD)
+==============
+
+Features:
+---------
+* Add ``atuin_history`` to store query history in `atuin <https://atuin.sh>`_,
+  tagged with ``atuin_author``, instead of ``history_file``. The entries are
+  visible to the shell's atuin search and are synced if atuin sync is used;
+  statements that set a password are not stored there. ``atuin_keys`` binds Up
+  to atuin's own search UI.
+* Add ``\\u [user]``: lists roles like ``\\du``, or shows one role's attributes
+  and the privileges granted to it directly, one row per object. Works on
+  Redshift through its ``svv_*`` views.
+* Lay out a single-column text result like ``ls -C`` on screen for boxed table
+  formats. Disable with ``grid_output = False``.
+
+Bug fixes:
+----------
+* Measure display width, not string length, when deciding whether output is too
+  wide for the terminal, so East Asian wide characters use the pager in time.
+* Require psycopg 3.3.5, the first to know Redshift's ``UNICODE``
+  client_encoding.
+* A query that succeeds when re-run after a reconnect now counts as successful.
+
 4.6.0 (2026-08-26)
 ==================
 

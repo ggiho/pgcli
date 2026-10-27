@@ -255,6 +255,7 @@ class PGCli:
         else:
             max_field_width = None
         self.max_field_width = max_field_width
+        self.grid_output = c["main"].as_bool("grid_output")
 
         self.min_num_menu_lines = c["main"].as_int("min_num_menu_lines")
         self.multiline_continuation_char = c["main"]["multiline_continuation_char"]
@@ -912,7 +913,8 @@ class PGCli:
             logger.error("traceback: %r", traceback.format_exc())
             click.secho(str(e), err=True, fg="red")
             if handle_closed_connection:
-                self._handle_server_closed_connection(text)
+                # The retry's outcome is this query's outcome.
+                query = self._handle_server_closed_connection(text) or query
         except (PgCliQuitError, EOFError):
             raise
         except Exception as e:
@@ -1270,7 +1272,9 @@ class PGCli:
                 max_field_width=self.max_field_width,
                 # \o and \log-file write this same output to a file, which keeps one value per line.
                 grid_width=(
-                    self.prompt_app.output.get_size().columns if self.prompt_app and not self.output_file and not self.log_file else None
+                    self.prompt_app.output.get_size().columns
+                    if self.grid_output and self.prompt_app and not self.output_file and not self.log_file
+                    else None
                 ),
             )
 
@@ -1316,7 +1320,10 @@ class PGCli:
         return output, meta_query
 
     def _handle_server_closed_connection(self, text):
-        """Used during CLI execution."""
+        """Used during CLI execution.
+
+        Returns the MetaQuery of the retried query, or None if it was not retried.
+        """
         try:
             click.secho("Reconnecting...", fg="green")
             self.pgexecute.connect()
@@ -1329,7 +1336,7 @@ class PGCli:
             if retry:
                 click.secho("Running query...", fg="green")
                 # Don't get stuck in a retry loop
-                self.execute_command(text, handle_closed_connection=False)
+                return self.execute_command(text, handle_closed_connection=False)
 
     def refresh_completions(self, history=None, persist_priorities="all"):
         """Refresh outdated completions

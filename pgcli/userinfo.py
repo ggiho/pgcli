@@ -20,6 +20,7 @@ import logging
 import string
 
 import psycopg
+from psycopg.pq import TransactionStatus
 from psycopg.sql import SQL, Literal
 from pgspecial.dbcommands import list_roles
 
@@ -40,16 +41,28 @@ _PG_ROLE_QUERY = SQL(
     """
 )
 
-_PG_PRIVILEGES_QUERY = SQL(
-    """
+# One query per kind of object, as (minimum server_version, query), so a server
+# is only asked about catalogs it has.
+_PG_PRIVILEGES_QUERIES = [
+    (
+        0,
+        """
     SELECT 'database', NULL, d.datname, a.privilege_type
     FROM pg_catalog.pg_database d, aclexplode(d.datacl) a
     WHERE a.grantee = {oid} AND a.grantee <> d.datdba
-    UNION ALL
+    """,
+    ),
+    (
+        0,
+        """
     SELECT 'schema', n.nspname, NULL, a.privilege_type
     FROM pg_catalog.pg_namespace n, aclexplode(n.nspacl) a
     WHERE a.grantee = {oid} AND a.grantee <> n.nspowner
-    UNION ALL
+    """,
+    ),
+    (
+        0,
+        """
     SELECT CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
                           WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'foreign table'
                           ELSE 'table' END,
@@ -58,31 +71,107 @@ _PG_PRIVILEGES_QUERY = SQL(
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
         aclexplode(c.relacl) a
     WHERE a.grantee = {oid} AND a.grantee <> c.relowner
-    UNION ALL
+    """,
+    ),
+    (
+        0,
+        """
     SELECT 'column', n.nspname, c.relname || '.' || att.attname, a.privilege_type
     FROM pg_catalog.pg_attribute att
     JOIN pg_catalog.pg_class c ON c.oid = att.attrelid
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
         aclexplode(att.attacl) a
     WHERE a.grantee = {oid} AND a.grantee <> c.relowner AND NOT att.attisdropped
-    UNION ALL
-    SELECT CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate'
-                          ELSE 'function' END,
+    """,
+    ),
+    (
+        0,
+        """
+    SELECT {function_kind},
         n.nspname, p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
         a.privilege_type
     FROM pg_catalog.pg_proc p
     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace,
         aclexplode(p.proacl) a
     WHERE a.grantee = {oid} AND a.grantee <> p.proowner
-    UNION ALL
+    """,
+    ),
+    (
+        0,
+        """
     SELECT CASE t.typtype WHEN 'd' THEN 'domain' ELSE 'type' END,
         n.nspname, t.typname, a.privilege_type
     FROM pg_catalog.pg_type t
     JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace,
         aclexplode(t.typacl) a
     WHERE a.grantee = {oid} AND a.grantee <> t.typowner
-    """
-)
+    """,
+    ),
+    (
+        0,
+        """
+    SELECT 'language', NULL, l.lanname, a.privilege_type
+    FROM pg_catalog.pg_language l, aclexplode(l.lanacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> l.lanowner
+    """,
+    ),
+    (
+        0,
+        """
+    SELECT 'foreign-data wrapper', NULL, w.fdwname, a.privilege_type
+    FROM pg_catalog.pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> w.fdwowner
+    """,
+    ),
+    (
+        0,
+        """
+    SELECT 'foreign server', NULL, s.srvname, a.privilege_type
+    FROM pg_catalog.pg_foreign_server s, aclexplode(s.srvacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> s.srvowner
+    """,
+    ),
+    (
+        0,
+        """
+    SELECT 'tablespace', NULL, t.spcname, a.privilege_type
+    FROM pg_catalog.pg_tablespace t, aclexplode(t.spcacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> t.spcowner
+    """,
+    ),
+    (
+        90000,
+        """
+    SELECT 'large object', NULL, lo.oid::text, a.privilege_type
+    FROM pg_catalog.pg_largeobject_metadata lo, aclexplode(lo.lomacl) a
+    WHERE a.grantee = {oid} AND a.grantee <> lo.lomowner
+    """,
+    ),
+    (
+        # Parameters have no owner.
+        150000,
+        """
+    SELECT 'parameter', NULL, p.parname, a.privilege_type
+    FROM pg_catalog.pg_parameter_acl p, aclexplode(p.paracl) a
+    WHERE a.grantee = {oid}
+    """,
+    ),
+]
+
+# prokind arrived in PostgreSQL 11, with procedures; before it, proisagg.
+_PROKIND = "CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate' ELSE 'function' END"
+_PROISAGG = "CASE WHEN p.proisagg THEN 'aggregate' ELSE 'function' END"
+
+
+def _pg_privileges_query(oid, server_version):
+    function_kind = SQL(_PROKIND if server_version >= 110000 else _PROISAGG)
+    parts = [
+        SQL(query).format(oid=Literal(oid), function_kind=function_kind)
+        for min_version, query in _PG_PRIVILEGES_QUERIES
+        if server_version >= min_version
+    ]
+    return SQL("UNION ALL").join(parts)
+
 
 _REDSHIFT_USER_QUERY = SQL(
     """
@@ -157,7 +246,7 @@ def _pg_role(cur, name, verbose):
         return None, None
     oid = rows[0][0]
     # The oid is only needed for the privilege lookup, so it is not shown.
-    return (headers[1:], [row[1:] for row in rows]), _PG_PRIVILEGES_QUERY.format(oid=Literal(oid))
+    return (headers[1:], [row[1:] for row in rows]), _pg_privileges_query(oid, cur.connection.info.server_version)
 
 
 def _redshift_role(cur, name, verbose):
@@ -178,13 +267,25 @@ def _redshift_role(cur, name, verbose):
 
 
 def _show_role(cur, name, verbose):
-    role, privileges_query = (_redshift_role if _is_redshift(cur) else _pg_role)(cur, name, verbose)
+    redshift = _is_redshift(cur)
+    role, privileges_query = (_redshift_role if redshift else _pg_role)(cur, name, verbose)
     if role is None:
         return [(None, None, None, f"No such user: {name}")]
 
     results = [(None, role[1], role[0], None)]
+    in_transaction = cur.connection.info.transaction_status == TransactionStatus.INTRANS
+    if redshift and in_transaction:
+        # Redshift takes SAVEPOINT but not ROLLBACK TO SAVEPOINT, so a failed
+        # lookup would abort the user's transaction.
+        results.append((None, None, None, "Privileges not looked up inside a transaction on Redshift; run \\u outside it to see them"))
+        return results
     try:
-        _, rows = _fetch(cur, privileges_query)
+        if in_transaction:
+            # A savepoint, so a failure rolls back only the lookup, not the user's transaction.
+            with cur.connection.transaction():
+                _, rows = _fetch(cur, privileges_query)
+        else:
+            _, rows = _fetch(cur, privileges_query)
     except psycopg.Error as e:
         _logger.debug("Privilege lookup failed: %s", e)
         results.append((None, None, None, f"Cannot read privileges: {e}"))
@@ -200,4 +301,7 @@ def list_users(cur, pattern, verbose):
     name = _role_name(pattern)
     if name:
         return _show_role(cur, name, verbose)
+    if pattern.strip():
+        # A quoted empty name, which no role can have.
+        return [(None, None, None, f"No such user: {pattern.strip()}")]
     return list_roles(cur, "", verbose)

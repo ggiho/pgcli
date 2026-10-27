@@ -52,7 +52,9 @@ def format_as_grid(header, rows, width, missing_value, style=None, table_format=
     """Lay out one column's values column-major, like ``ls -C``, in a framed box under the header.
 
     Returns None when a value is not text or NULL, contains a newline or tab, or
-    when fewer than two columns fit in *width*.
+    when fewer than two columns fit in *width*. Also when a value (or the NULL
+    string) is empty, has leading or trailing whitespace, or two spaces in a row,
+    since the grid's own spacing would hide those.
     """
     values = []
     nulls = set()
@@ -61,6 +63,8 @@ def format_as_grid(header, rows, width, missing_value, style=None, table_format=
             value = missing_value
             nulls.add(i)
         elif not isinstance(value, str) or "\n" in value or "\t" in value:
+            return None
+        if not value or value != value.strip() or "  " in value:
             return None
         values.append(value)
     if len(values) < 2:

@@ -304,6 +304,30 @@ def test_is_too_wide_measures_display_width(pset_pager_mocks):
     assert cli.is_too_wide("가" * 50) is False
 
 
+def test_query_that_succeeds_on_retry_after_reconnect_counts_as_successful():
+    from psycopg import OperationalError
+
+    from pgcli.main import MetaQuery
+
+    cli = PGCli()
+    cli.auto_retry_closed_connection = True
+    cli.pgexecute = mock.Mock()
+    attempts = []
+
+    def evaluate(text):
+        attempts.append(text)
+        if len(attempts) == 1:
+            raise OperationalError("server closed the connection unexpectedly")
+        return [], MetaQuery(query=text, successful=True)
+
+    with mock.patch.object(cli, "_evaluate_command", side_effect=evaluate):
+        query = cli.execute_command("SELECT 1")
+
+    assert attempts == ["SELECT 1", "SELECT 1"]
+    cli.pgexecute.connect.assert_called_once()
+    assert query.successful is True
+
+
 @pytest.mark.parametrize("term_height,term_width,text,use_pager", pager_on_test_data, ids=test_ids)
 def test_pset_pager_on(term_height, term_width, text, use_pager, pset_pager_mocks):
     cli, mock_echo, mock_echo_via_pager, mock_cli = pset_pager_mocks

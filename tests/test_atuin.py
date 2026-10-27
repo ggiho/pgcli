@@ -28,7 +28,9 @@ class FakeAtuin:
         self.kwargs = kwargs
         if self.raises:
             raise self.raises
-        return subprocess.CompletedProcess(argv, self.returncode, stdout=self.stdout, stderr=self.stderr)
+        # A callable stdout answers per call, e.g. a new id for each `history start`.
+        stdout = self.stdout(argv) if callable(self.stdout) else self.stdout
+        return subprocess.CompletedProcess(argv, self.returncode, stdout=stdout, stderr=self.stderr)
 
 
 @pytest.fixture
@@ -119,6 +121,91 @@ def test_store_keeps_sql_that_starts_with_a_dash(fake_atuin):
     AtuinHistory().store_string("-- note\nSELECT 1")
     # Without "--" atuin rejects this as an unknown option.
     assert fake.calls[0][-2:] == ["--", "-- note\nSELECT 1"]
+
+
+def numbered_ids():
+    """A stdout for FakeAtuin that hands out id1, id2, ... per `history start`."""
+    count = 0
+
+    def stdout(argv):
+        nonlocal count
+        if argv[1:3] != ["history", "start"]:
+            return ""
+        count += 1
+        return f"id{count}\n"
+
+    return stdout
+
+
+def ends(fake):
+    """(exit code, id) of every `history end`, in order."""
+    return [(call[call.index("--exit") + 1], call[-1]) for call in fake.calls if call[1:3] == ["history", "end"]]
+
+
+def starts(fake):
+    return [call[-1] for call in fake.calls if call[1:3] == ["history", "start"]]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ALTER ROLE bob PASSWORD 'hunter2'",
+        "alter user bob with encrypted password 'hunter2'",
+        "CREATE USER bob\n    WITH LOGIN\n    PASSWORD 'hunter2'",
+        "Create Role bob Login Password 'hunter2'",
+        "CREATE GROUP g PASSWORD 'hunter2'",
+        "SELECT 1; ALTER USER bob PASSWORD 'hunter2'; SELECT 2",
+        "-- rotate\nALTER USER bob PASSWORD 'hunter2'",
+        "/* rotate */ ALTER USER bob PASSWORD 'hunter2'",
+        "CREATE USER MAPPING FOR bob SERVER s OPTIONS (user 'bob', password 'hunter2')",
+        "\\password",
+        "\\password bob",
+        # Holds no secret, but is not told apart from the other PASSWORD clauses.
+        "ALTER ROLE bob PASSWORD NULL",
+    ],
+)
+def test_store_skips_statements_that_set_a_password(fake_atuin, text):
+    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    history = AtuinHistory()
+    history.store_string(text)
+    history.end(True)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "SELECT password FROM users",
+        "SELECT user_password FROM accounts WHERE role = 'admin'",
+        "ALTER ROLE bob VALID UNTIL 'infinity'",
+        "CREATE TABLE password_resets (token text)",
+        "ALTER TABLE users ALTER COLUMN password SET NOT NULL",
+    ],
+)
+def test_store_keeps_statements_that_only_mention_password(fake_atuin, text):
+    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    AtuinHistory().store_string(text)
+    assert starts(fake) == [text]
+
+
+def test_skipping_a_password_statement_still_finishes_the_entry_before_it(fake_atuin):
+    fake = fake_atuin(stdout=numbered_ids())
+    history = AtuinHistory()
+    history.store_string("SELECT 1")
+    history.store_string("ALTER USER bob PASSWORD 'hunter2'")
+    history.end(False)
+    assert starts(fake) == ["SELECT 1"]
+    assert ends(fake) == [("0", "id1")]
+
+
+def test_store_finishes_an_entry_still_pending(fake_atuin):
+    """\\e stores its own line, then the edited SQL; the first must not be left unfinished."""
+    fake = fake_atuin(stdout=numbered_ids())
+    history = AtuinHistory()
+    history.store_string("\\e")
+    history.store_string("SELECT edited")
+    history.end(False)
+    assert ends(fake) == [("0", "id1"), ("1", "id2")]
 
 
 @pytest.mark.parametrize(("success", "exit_code"), [(True, "0"), (False, "1")])
@@ -296,9 +383,10 @@ def test_up_not_rebound_when_atuin_history_is_off(monkeypatch):
 
 def test_run_cli_ends_each_entry_with_its_querys_outcome(monkeypatch, fake_atuin):
     from pgcli import atuin as atuin_module
+    from pgcli import main as main_module
     from pgcli.main import MetaQuery, PGCli, PgCliQuitError
 
-    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
+    fake = fake_atuin(stdout=numbered_ids())
     monkeypatch.setattr(atuin_module, "is_available", lambda: True)
     cli = PGCli()
     cli.atuin_history = True
@@ -307,14 +395,22 @@ def test_run_cli_ends_each_entry_with_its_querys_outcome(monkeypatch, fake_atuin
     class FakePrompt:
         def __init__(self, history):
             self.history = history
-            self.texts = ["SELECT 1", "SELECT bad", "\\q"]
+            self.texts = ["SELECT 1", "SELECT 1", "SELECT bad", "\\e", "\\q"]
 
-        def prompt(self):
-            if not self.texts:
+        def prompt(self, default=None):
+            # \e prompts again with the edited SQL as the default.
+            if default is not None:
+                text = default
+            elif not self.texts:
                 raise EOFError
-            # prompt_toolkit stores the line on accept, before it is run.
-            self.history.append_string(self.texts[0])
-            return self.texts.pop(0)
+            else:
+                text = self.texts.pop(0)
+            # prompt_toolkit stores the line on accept, before it is run, and
+            # skips a repeat of the previous entry (Buffer.append_to_history).
+            strings = self.history.get_strings()
+            if not strings or strings[-1] != text:
+                self.history.append_string(text)
+            return text
 
     def execute_command(text):
         if text == "\\q":
@@ -325,7 +421,10 @@ def test_run_cli_ends_each_entry_with_its_querys_outcome(monkeypatch, fake_atuin
     monkeypatch.setattr(cli, "_build_cli", FakePrompt)
     monkeypatch.setattr(cli, "execute_command", execute_command)
     monkeypatch.setattr(cli, "_check_ongoing_transaction_and_allow_quitting", lambda: True)
+    monkeypatch.setattr(main_module.special, "open_external_editor", lambda filename, sql, editor: ("SELECT edited", None))
     cli.run_cli()
 
-    ends = [call[call.index("--exit") + 1] for call in fake.calls if call[1:3] == ["history", "end"]]
-    assert ends == ["0", "1", "0"]
+    assert starts(fake) == ["SELECT 1", "SELECT bad", "\\e", "SELECT edited", "\\q"]
+    # The repeated SELECT 1 was not stored, so it ends nothing; \e's own entry is
+    # finished when the edited SQL is stored, and that SQL gets the outcome.
+    assert ends(fake) == [("0", "id1"), ("1", "id2"), ("0", "id3"), ("1", "id4"), ("0", "id5")]
