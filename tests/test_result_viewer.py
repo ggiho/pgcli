@@ -1,8 +1,12 @@
+import os
 from pathlib import Path
+
+import pytest
 
 from pgcli.result_viewer import ResultViewer, configured_result_viewer
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='SQL viewer requires a POSIX terminal')
 def test_result_sessions_are_private_isolated_and_removed(tmp_path, monkeypatch):
     monkeypatch.delenv('SQL_VIEWER_SESSION', raising=False)
     command = tmp_path / 'viewer'
