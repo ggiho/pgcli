@@ -52,7 +52,7 @@ def test_result_toggle_preserves_draft_and_cursor(monkeypatch):
     monkeypatch.setattr(key_bindings, 'run_in_terminal', lambda callback, **kwargs: callback())
     kb = key_bindings.pgcli_bindings(SimpleNamespace(atuin_keys=False))
     buffer = Buffer(document=Document('select * from users where id = ', cursor_position=12))
-    handler = next(binding.handler for binding in kb.bindings if binding.keys == ('c-g',))
+    handler = next(binding.handler for binding in kb.bindings if binding.keys == ('escape', 't'))
     handler(SimpleNamespace(current_buffer=buffer, app=SimpleNamespace(current_buffer=buffer)))
     viewer.resume.assert_called_once_with()
     assert buffer.text == 'select * from users where id = '

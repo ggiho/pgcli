@@ -384,7 +384,7 @@ Cached SQL result viewer
 ------------------------
 
 With the custom ``sql-pager/viewer`` pager and a compatible ``sql-viewer``, press
-**Ctrl+G** to switch between query input and the last displayed result.
+**Alt+T (Option+T on macOS)** to switch between query input and the last displayed result.
 The draft and cursor remain in the prompt, and reopening does not execute SQL.
 The viewer restores selection, sorting, search and scrolling. Each CLI process
 owns a private cache that is removed at exit; results above 64 MiB are not cached.
