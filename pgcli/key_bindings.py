@@ -25,7 +25,7 @@ def pgcli_bindings(pgcli):
     pgcli.result_viewer = viewer
     if viewer is not None:
 
-        @kb.add("c-x", "c-v")
+        @kb.add("c-g", filter=~is_searching)
         def reopen_result(event):
             # Suspend rendering only; the draft and cursor stay in this buffer.
             run_in_terminal(viewer.resume, in_executor=True)

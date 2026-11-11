@@ -58,6 +58,6 @@ def configured_result_viewer() -> ResultViewer | None:
         info = subprocess.run([str(binary), '--help'], capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    if info.returncode != 0 or 'Ctrl+X Ctrl+V' not in info.stdout:
+    if info.returncode != 0 or '--view-state' not in info.stdout:
         return None
     return ResultViewer(command)
