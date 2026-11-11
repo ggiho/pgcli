@@ -1,4 +1,5 @@
 import logging
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import (
@@ -11,6 +12,7 @@ from prompt_toolkit.filters import (
 )
 
 from . import atuin
+from .result_viewer import configured_result_viewer
 from .pgbuffer import buffer_should_be_handled, safe_multi_line_mode
 
 _logger = logging.getLogger(__name__)
@@ -19,6 +21,14 @@ _logger = logging.getLogger(__name__)
 def pgcli_bindings(pgcli):
     """Custom key bindings for pgcli."""
     kb = KeyBindings()
+    viewer = configured_result_viewer()
+    pgcli.result_viewer = viewer
+    if viewer is not None:
+
+        @kb.add("c-x", "c-v")
+        def reopen_result(event):
+            # Suspend rendering only; the draft and cursor stay in this buffer.
+            run_in_terminal(viewer.resume, in_executor=True)
 
     tab_insert_text = " " * 4
 

@@ -734,3 +734,15 @@ def test_get_editor_precedence():
     # Nothing set -> None, so click uses its platform default.
     with mock.patch.dict(os.environ, {}, clear=True):
         assert get_editor() is None
+
+
+def test_inline_result_is_remembered_without_executing_again(pset_pager_mocks):
+    cli, mock_echo, mock_pager, mock_app = pset_pager_mocks
+    cli.result_viewer = mock.Mock()
+    cli.pgspecial.pager_config = PAGER_LONG_OUTPUT
+    mock_app.output.get_size.return_value = termsize(rows=24, columns=80)
+    text = '+----+\n| id |\n+----+\n| 1  |\n+----+'
+    cli.echo_via_pager(text)
+    cli.result_viewer.remember.assert_called_once_with(text)
+    mock_echo.assert_called_once()
+    mock_pager.assert_not_called()

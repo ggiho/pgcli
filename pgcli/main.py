@@ -314,6 +314,7 @@ class PGCli:
         self._completer_lock = threading.Lock()
         self.register_special_commands()
 
+        self.result_viewer = None
         self.prompt_app = None
 
         self.dsn_ssh_tunnel_config = c.get("dsn ssh tunnels")
@@ -1437,6 +1438,8 @@ class PGCli:
 
     def echo_via_pager(self, text, color=None):
         if self.pgspecial.pager_config == PAGER_OFF or self.watch_command:
+            if self.result_viewer is not None and not self.watch_command:
+                self.result_viewer.remember(text)
             click.echo(text, color=color)
         elif self.pgspecial.pager_config == PAGER_LONG_OUTPUT and self.table_format != "csv":
             lines = text.split("\n")
@@ -1445,6 +1448,8 @@ class PGCli:
             if self.is_too_tall(lines) or any(self.is_too_wide(l) for l in lines):
                 click.echo_via_pager(text, color=color)
             else:
+                if self.result_viewer is not None:
+                    self.result_viewer.remember(text)
                 click.echo(text, color=color)
         else:
             click.echo_via_pager(text, color)
