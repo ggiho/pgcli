@@ -40,20 +40,11 @@ def test_other_pagers_do_not_create_a_viewer_session(monkeypatch):
     assert configured_result_viewer() is None
 
 
-def test_result_toggle_preserves_draft_and_cursor(monkeypatch):
+def test_result_toggle_does_not_reserve_a_user_shortcut(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
-    from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.document import Document
     from pgcli import key_bindings
 
-    viewer = Mock()
-    monkeypatch.setattr(key_bindings, 'configured_result_viewer', lambda: viewer)
-    monkeypatch.setattr(key_bindings, 'run_in_terminal', lambda callback, **kwargs: callback())
+    monkeypatch.setattr(key_bindings, 'configured_result_viewer', lambda: Mock())
     kb = key_bindings.pgcli_bindings(SimpleNamespace(atuin_keys=False))
-    buffer = Buffer(document=Document('select * from users where id = ', cursor_position=12))
-    handler = next(binding.handler for binding in kb.bindings if binding.keys == ('escape', 't'))
-    handler(SimpleNamespace(current_buffer=buffer, app=SimpleNamespace(current_buffer=buffer)))
-    viewer.resume.assert_called_once_with()
-    assert buffer.text == 'select * from users where id = '
-    assert buffer.cursor_position == 12
+    assert not any(item.keys in [('escape', 't'), ('c-g',), ('c-x', 'c-v')] for item in kb.bindings)

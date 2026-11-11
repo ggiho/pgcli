@@ -383,10 +383,8 @@ Thanks to all the beta testers and contributors for your time and patience. :)
 Cached SQL result viewer
 ------------------------
 
-With the custom ``sql-pager/viewer`` pager and a compatible ``sql-viewer``, press
-**Alt+T (Option+T on macOS)** to switch between query input and the last displayed result.
-The draft and cursor remain in the prompt, and reopening does not execute SQL.
-The viewer restores selection, sorting, search and scrolling. Each CLI process
-owns a private cache that is removed at exit; results above 64 MiB are not cached.
-Inline results are also remembered. Other pagers keep their existing bindings.
-Restart pgcli after installing the update.
+The custom SQL pager can retain results and viewer state in a private cache.
+No result-toggle shortcut is assigned by default. Select a shortcut explicitly
+before adding a prompt binding; existing terminal and editor keys remain usable.
+Inline results are remembered too. Caches are removed at normal process exit;
+results above 64 MiB are not cached.

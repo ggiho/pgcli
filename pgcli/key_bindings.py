@@ -1,5 +1,4 @@
 import logging
-from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import (
@@ -21,14 +20,7 @@ _logger = logging.getLogger(__name__)
 def pgcli_bindings(pgcli):
     """Custom key bindings for pgcli."""
     kb = KeyBindings()
-    viewer = configured_result_viewer()
-    pgcli.result_viewer = viewer
-    if viewer is not None:
-
-        @kb.add("escape", "t", filter=~is_searching)
-        def reopen_result(event):
-            # Suspend rendering only; the draft and cursor stay in this buffer.
-            run_in_terminal(viewer.resume, in_executor=True)
+    pgcli.result_viewer = configured_result_viewer()
 
     tab_insert_text = " " * 4
 
