@@ -75,6 +75,7 @@ from .atuin import AtuinHistory
 from .userinfo import list_users
 from .grid import GRID_FORMATS, format_as_grid
 from .key_bindings import pgcli_bindings
+from .result_pages import PagedRows
 from .packages.formatter.sqlformatter import register_new_formatter
 from .packages.prompt_utils import confirm, confirm_destructive_query
 from .packages.parseutils import is_destructive
@@ -1236,12 +1237,33 @@ class PGCli:
         # Run the query.
         start = time()
         on_error_resume = self.on_error == "RESUME"
+        viewer = self.result_viewer
+        if viewer is not None:
+            viewer.release_result()
+        use_viewer = (
+            viewer is not None
+            and viewer.paging_enabled
+            and not self.watch_command
+            and self.table_format == "ascii_escaped"
+            and len(sqlparse.split(text)) == 1
+            and not self.output_file
+            and not self.log_file
+            and not self.explain_mode
+            and not self.expanded_output
+            and not self.pgspecial.expanded_output
+            and self.pgspecial.pager_config != PAGER_OFF
+            and not text.lstrip().startswith("\\")
+        )
+        if use_viewer:
+            viewer.null_string = self.null_string or "NULL"
+        run_options = {"result_viewer": viewer} if use_viewer else {}
         res = self.pgexecute.run(
             text,
             self.pgspecial,
             lambda x: exception_formatter(x, self.verbose_errors),
             on_error_resume,
             explain_mode=self.explain_mode,
+            **run_options,
         )
 
         is_special = None
@@ -1251,6 +1273,11 @@ class PGCli:
             logger.debug("rows: %r", cur)
             logger.debug("status: %r", status)
 
+            if isinstance(cur, PagedRows):
+                execution = total = time() - start
+                viewer.show()
+                all_success = all_success and not viewer.fetch_error
+                continue
             if self._should_limit_output(sql, cur):
                 cur, status = self._limit_output(cur)
 

@@ -12,6 +12,7 @@ import sqlparse
 sqlparse.engine.grouping.MAX_GROUPING_DEPTH = None
 sqlparse.engine.grouping.MAX_GROUPING_TOKENS = None
 
+from .result_pages import PagedRows, postgres_stream
 from .packages.parseutils.meta import FunctionMetadata, ForeignKey
 
 _logger = logging.getLogger(__name__)
@@ -322,6 +323,7 @@ class PGExecute:
         exception_formatter=None,
         on_error_resume=False,
         explain_mode=False,
+        result_viewer=None,
     ):
         """Execute the sql in the database and return the results.
 
@@ -410,7 +412,9 @@ class PGExecute:
                         pass
 
                 # Not a special command, so execute as normal sql
-                yield self.execute_normal_sql(sql) + (sql, True, False)
+                yield (
+                    self.execute_normal_sql(sql, result_viewer=result_viewer) if result_viewer is not None else self.execute_normal_sql(sql)
+                ) + (sql, True, False)
             except psycopg.DatabaseError as e:
                 _logger.error("sql: %r, error: %r", sql, e)
                 _logger.error("traceback: %r", traceback.format_exc())
@@ -441,7 +445,7 @@ class PGExecute:
         """
         return self.conn.closed != 0
 
-    def execute_normal_sql(self, split_sql):
+    def execute_normal_sql(self, split_sql, result_viewer=None):
         """Returns tuple (title, rows, headers, status)"""
         _logger.debug("Regular sql statement. sql: %r", split_sql)
 
@@ -463,6 +467,11 @@ class PGExecute:
             res = self.conn.pgconn.exec_(split_sql.encode())
             return title, None, None, res.command_status.decode()
 
+        if result_viewer is not None and not self.is_virtual_database():
+            streamed = postgres_stream(self, split_sql)
+            if streamed is not None:
+                result_viewer.begin(streamed, null_string=result_viewer.null_string)
+                return title, streamed, streamed.headers, 'SELECT preview'
         cur = self.conn.cursor()
         cur.execute(split_sql)
 
@@ -470,6 +479,11 @@ class PGExecute:
         # rows.
         if cur.description:
             headers = [x[0] for x in cur.description]
+            if result_viewer is not None and sqlparse.parse(split_sql)[0].get_type() == 'SELECT':
+                status = cur.statusmessage
+                buffered = PagedRows(iter(cur.fetchall()), cur.description, cur.close, lambda: None, live=False)
+                result_viewer.begin(buffered, null_string=result_viewer.null_string)
+                return title, buffered, headers, status
             return title, cur, headers, cur.statusmessage
         elif cur.protocol_error:
             _logger.debug("Protocol error, unsupported command.")

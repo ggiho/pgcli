@@ -21,7 +21,7 @@ _logger = logging.getLogger(__name__)
 def pgcli_bindings(pgcli):
     """Custom key bindings for pgcli."""
     kb = KeyBindings()
-    viewer = configured_result_viewer()
+    viewer = getattr(pgcli, "result_viewer", None) or configured_result_viewer()
     pgcli.result_viewer = viewer
     if viewer is not None:
 
