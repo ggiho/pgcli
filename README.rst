@@ -383,8 +383,9 @@ Thanks to all the beta testers and contributors for your time and patience. :)
 Cached SQL result viewer
 ------------------------
 
-The custom SQL pager can retain results and viewer state in a private cache.
-No result-toggle shortcut is assigned by default. Select a shortcut explicitly
-before adding a prompt binding; existing terminal and editor keys remain usable.
-Inline results are remembered too. Caches are removed at normal process exit;
-results above 64 MiB are not cached.
+With the compatible custom pager, the user-selected **Ctrl+T** switches between
+query input and cached results. It replaces prompt character transposition while
+preserving the draft and cursor. Reopening restores viewer state without SQL
+execution. Alt+E and Alt+T are unchanged. Inline results are also remembered.
+The private per-process cache is removed on normal exit; results over 64 MiB are
+not cached. Restart pgcli after updating. Other pagers retain their bindings.

@@ -48,3 +48,22 @@ def test_result_toggle_does_not_reserve_a_user_shortcut(monkeypatch):
     monkeypatch.setattr(key_bindings, 'configured_result_viewer', lambda: Mock())
     kb = key_bindings.pgcli_bindings(SimpleNamespace(atuin_keys=False))
     assert not any(item.keys in [('escape', 't'), ('c-g',), ('c-x', 'c-v')] for item in kb.bindings)
+
+
+def test_user_selected_ctrl_t_preserves_query_draft(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.document import Document
+    from pgcli import key_bindings
+
+    viewer = Mock()
+    monkeypatch.setattr(key_bindings, 'configured_result_viewer', lambda: viewer)
+    monkeypatch.setattr(key_bindings, 'run_in_terminal', lambda callback, **kwargs: callback())
+    kb = key_bindings.pgcli_bindings(SimpleNamespace(atuin_keys=False))
+    buffer = Buffer(document=Document('select * from users where id = ', cursor_position=12))
+    handler = next(binding.handler for binding in kb.bindings if binding.keys == ('c-t',))
+    handler(SimpleNamespace(current_buffer=buffer, app=SimpleNamespace(current_buffer=buffer)))
+    viewer.resume.assert_called_once_with()
+    assert buffer.text == 'select * from users where id = '
+    assert buffer.cursor_position == 12
