@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import click
+from prompt_toolkit.utils import get_cwidth
 
 
 _DISPLAY_ESCAPES = {i: '\\x' + format(i, '02x') for i in [*range(32), *range(127, 160)]}
@@ -200,7 +201,9 @@ class ResultViewer:
         if not self.headers and not self.rows:
             click.echo(self.message or '0 rows')
             return
-        if not force and not self.has_more:
+        force = force or os.environ.get('SQL_VIEWER_ALWAYS') == '1'
+        size = shutil.get_terminal_size()
+        if not force and not self.has_more and len(self.rows) + 4 < size.lines - 2:
             from cli_helpers.tabular_output import TabularOutputFormatter
 
             rendered = '\n'.join(
@@ -213,8 +216,7 @@ class ResultViewer:
                     missing_value=self.null_string,
                 )
             )
-            size = shutil.get_terminal_size()
-            if len(rendered.splitlines()) < size.lines - 2 and all(len(line) <= size.columns for line in rendered.splitlines()):
+            if len(rendered.splitlines()) < size.lines - 2 and all(get_cwidth(line) <= size.columns for line in rendered.splitlines()):
                 click.echo(rendered)
                 return
         address = Path(self.path) / 'query.sock'
