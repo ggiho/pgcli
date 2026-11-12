@@ -292,3 +292,24 @@ def test_inline_fit_uses_terminal_cells_and_respects_always(tmp_path, monkeypatc
         assert len(launched) == 1
     finally:
         viewer.close()
+
+
+def test_large_field_skips_inline_table_formatting(tmp_path, monkeypatch):
+    from pgcli import result_viewer as module
+    from cli_helpers.tabular_output import TabularOutputFormatter
+    from types import SimpleNamespace
+
+    monkeypatch.delenv('SQL_VIEWER_ALWAYS', raising=False)
+    monkeypatch.setattr(module.shutil, 'get_terminal_size', lambda: os.terminal_size((80, 24)))
+    monkeypatch.setattr(module.subprocess, 'Popen', lambda *args: SimpleNamespace(poll=lambda: 0, wait=lambda: 0))
+
+    def unexpected_format(*args, **kwargs):
+        raise AssertionError('wide cells must bypass inline table formatting')
+
+    monkeypatch.setattr(TabularOutputFormatter, 'format_output', unexpected_format)
+    viewer = ResultViewer(tmp_path / 'unused')
+    try:
+        viewer.begin(PagedRows(iter([('x' * 1_000_000,)]), [('v',)], lambda: None, lambda: None, live=False))
+        viewer.show()
+    finally:
+        viewer.close()

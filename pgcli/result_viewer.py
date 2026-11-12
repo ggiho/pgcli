@@ -203,7 +203,13 @@ class ResultViewer:
             return
         force = force or os.environ.get('SQL_VIEWER_ALWAYS') == '1'
         size = shutil.get_terminal_size()
-        if not force and not self.has_more and len(self.rows) + 4 < size.lines - 2:
+        if (
+            not force
+            and not self.has_more
+            and len(self.rows) + 4 < size.lines - 2
+            # Reject clearly wide fields before the formatter pads whole rows.
+            and all(len(value) <= size.columns for row in [self.headers, *self.rows] for value in row)
+        ):
             from cli_helpers.tabular_output import TabularOutputFormatter
 
             rendered = '\n'.join(
