@@ -25,30 +25,30 @@ class FakeCursor:
 def test_format_as_grid_fills_columns_top_to_bottom_like_ls():
     rows = [(name,) for name in ["alpha", "b", "charlie", "d", "echo"]]
 
-    # Three columns of two rows need 5 + 2 + 7 + 2 + 4 = 20 cells plus 4 for the
+    # Three columns of two rows need 5 + 5 + 7 + 5 + 4 = 26 cells plus 4 for the
     # frame; anything narrower falls back to two columns of three rows.
-    assert format_as_grid("datname", rows, 24, "<null>", table_format="psql") == [
-        "+----------------------+",
-        "| datname              |",
-        "|----------------------|",
-        "| alpha  charlie  echo |",
-        "| b      d             |",
-        "+----------------------+",
+    assert format_as_grid("datname", rows, 30, "<null>", table_format="psql") == [
+        '+----------------------------+',
+        '| datname                    |',
+        '|----------------------------|',
+        '| alpha  |  charlie  |  echo |',
+        '| b      |  d        |       |',
+        '+----------------------------+',
     ]
-    assert format_as_grid("datname", rows, 23, "<null>", table_format="psql") == [
-        "+---------------+",
-        "| datname       |",
-        "|---------------|",
-        "| alpha    d    |",
-        "| b        echo |",
-        "| charlie       |",
-        "+---------------+",
+    assert format_as_grid("datname", rows, 29, "<null>", table_format="psql") == [
+        '+------------------+',
+        '| datname          |',
+        '|------------------|',
+        '| alpha    |  d    |',
+        '| b        |  echo |',
+        '| charlie  |       |',
+        '+------------------+',
     ]
 
 
 @pytest.mark.parametrize(
     ("table_format", "rule"),
-    [("ascii", "+------+"), ("psql_unicode", "├──────┤")],
+    [("ascii", "+---------+"), ("psql_unicode", "├─────────┤")],
 )
 def test_format_as_grid_matches_the_table_formats_frame(table_format, rule):
     assert format_as_grid("h", [("a",), ("b",)], 80, "<null>", table_format=table_format)[2] == rule
@@ -56,11 +56,11 @@ def test_format_as_grid_matches_the_table_formats_frame(table_format, rule):
 
 def test_format_as_grid_widens_the_frame_for_a_long_header():
     assert format_as_grid("tablename_long", [("a",), ("b",)], 80, "<null>") == [
-        "+----------------+",
-        "| tablename_long |",
-        "+----------------+",
-        "| a  b           |",
-        "+----------------+",
+        '+----------------+',
+        '| tablename_long |',
+        '+----------------+',
+        '| a  |  b        |',
+        '+----------------+',
     ]
 
 
@@ -70,14 +70,20 @@ def test_format_as_grid_styles_header_separators_and_nulls():
 
     lines = format_as_grid("h", [("a",), (None,)], 80, "<null>", style=GridStyle)
 
-    assert [strip_ansi(line) for line in lines] == ["+-----------+", "| h         |", "+-----------+", "| a  <null> |", "+-----------+"]
+    assert [strip_ansi(line) for line in lines] == [
+        '+--------------+',
+        '| h            |',
+        '+--------------+',
+        '| a  |  <null> |',
+        '+--------------+',
+    ]
     assert all(line != strip_ansi(line) for line in lines)
 
 
 def test_format_as_grid_measures_wide_characters():
     lines = format_as_grid("h", [("한글",), ("a",)], 80, "<null>")
 
-    assert lines[3] == "| 한글  a |"
+    assert lines[3] == "| 한글  |  a |"
     assert len({get_cwidth(line) for line in lines}) == 1
 
 
@@ -107,14 +113,22 @@ def test_format_as_grid_returns_none_when_the_null_string_would_be_misread(missi
 
 
 def test_format_as_grid_keeps_single_spaces_inside_values():
-    assert format_as_grid("h", [("a b",), ("c",)], 80, "<null>")[3] == "| a b  c |"
+    assert format_as_grid("h", [("a b",), ("c",)], 80, "<null>")[3] == "| a b  |  c |"
 
 
 def test_format_output_lays_out_single_column_as_grid_when_width_is_given():
     settings = OutputSettings(table_format="psql", dcmlfmt="d", floatfmt="g", grid_width=80)
     results = format_output("Title", [("a",), ("b",), ("c",)], ["name"], "SELECT 3", settings)
 
-    assert list(results) == ["Title", "+---------+", "| name    |", "|---------|", "| a  b  c |", "+---------+", "SELECT 3"]
+    assert list(results) == [
+        'Title',
+        '+---------------+',
+        '| name          |',
+        '|---------------|',
+        '| a  |  b  |  c |',
+        '+---------------+',
+        'SELECT 3',
+    ]
 
 
 @pytest.mark.parametrize(
@@ -144,14 +158,14 @@ def test_format_output_keeps_table_for_more_than_one_column():
 def test_format_output_lays_out_grid_for_boxed_formats(table_format):
     settings = OutputSettings(table_format=table_format, dcmlfmt="d", floatfmt="g", grid_width=80)
 
-    assert any("a  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
+    assert any("a  |  b" in line or "a  │  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
 
 
 @pytest.mark.parametrize("table_format", ["plain", "simple", "minimal", "github", "pipe", "rst", "orgtbl"])
 def test_format_output_keeps_table_for_formats_without_a_box(table_format):
     settings = OutputSettings(table_format=table_format, dcmlfmt="d", floatfmt="g", grid_width=80)
 
-    assert not any("a  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
+    assert not any("a  |  b" in line or "a  │  b" in line for line in format_output(None, [("a",), ("b",)], ["name"], None, settings))
 
 
 @pytest.mark.parametrize("header", ["QUERY PLAN", "query plan"])
@@ -185,11 +199,11 @@ def test_grid_is_off_while_a_log_file_is_written(tmp_path):
     ]
 
     output, _ = cli._evaluate_command("SELECT")
-    assert "| a  b  c |" in output
+    assert "| a  |  b  |  c |" in output
 
     cli.log_file = str(tmp_path / "pgcli.log")
     output, _ = cli._evaluate_command("SELECT")
-    assert "| a  b  c |" not in output
+    assert "| a  |  b  |  c |" not in output
 
 
 def test_grid_output_false_keeps_the_table():
@@ -204,7 +218,7 @@ def test_grid_output_false_keeps_the_table():
 
     cli.grid_output = False
     output, _ = cli._evaluate_command("SELECT")
-    assert "| a  b  c |" not in output
+    assert "| a  |  b  |  c |" not in output
     assert "| a    |" in output
 
 
@@ -213,3 +227,20 @@ def test_grid_output_is_read_from_the_config(tmp_path):
     rc.write_text("[main]\ngrid_output = False\n")
 
     assert PGCli(pgclirc_file=str(rc)).grid_output is False
+
+
+@pytest.mark.parametrize('width', [40, 80, 160])
+def test_list_grid_limits_density_and_keeps_separators_aligned(width):
+    names = ['name_' + str(i).zfill(2) for i in range(8)]
+    lines = format_as_grid('Database', [(v,) for v in names], width, '<null>')
+    assert lines is not None
+    body = [strip_ansi(line) for line in lines[3:-1]]
+    cells = [line[2:-2].split('  |  ') for line in body]
+    assert len(cells) == 3
+    assert all(len(row) == 3 for row in cells)
+    restored = [cells[r][c].strip() for c in range(3) for r in range(3) if cells[r][c].strip()]
+    assert restored == names
+    positions = [[i for i, char in enumerate(line) if char == '|'] for line in body]
+    assert all(p == positions[0] for p in positions)
+    assert len({get_cwidth(strip_ansi(line)) for line in lines}) == 1
+    assert get_cwidth(strip_ansi(lines[0])) <= width

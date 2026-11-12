@@ -174,8 +174,8 @@ on_error = STOP
 # Set threshold for row limit. Use 0 to disable limiting.
 row_limit = 1000
 
-# Lay out a single-column result like `ls -C`, several values per line, when the
-# table format is boxed (psql, grid, ascii, ...). Only on screen, and only for
+# Lay out a single-column result in at most three separated display columns,
+# in column-major order, for boxed formats (psql, grid, ascii, ...). Only for
 # text values that the layout cannot misrepresent; anything else keeps the table.
 grid_output = True
 
