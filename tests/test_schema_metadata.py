@@ -13,7 +13,7 @@ def test_postgres_metadata_preserves_source_and_binds_names(monkeypatch):
     cursor = connection.cursor.return_value.__enter__.return_value
     cursor.fetchone.side_effect = [(123, 'r')]
     cursor.fetchall.side_effect = [
-        [('id', 'integer', True, None)],
+        [('id', 'integer', True, None, True, 'identifier')],
         [('pk', 'PRIMARY KEY (id)')],
         [('pk', 'CREATE UNIQUE INDEX pk ON t(id)')],
     ]
@@ -21,7 +21,9 @@ def test_postgres_metadata_preserves_source_and_binds_names(monkeypatch):
     monkeypatch.setattr(schema_metadata.psycopg, 'connect', connect)
     provider = schema_metadata.SchemaMetadata(source)
     result = provider.describe('a"b', 'order')
-    assert 'PRIMARY KEY' in result and 'NOT NULL' in result
+    assert result.columns[0].primary and not result.columns[0].nullable
+    assert 'PRIMARY KEY' in result.definition
+    assert result.indexes[0].name == 'pk'
     assert cursor.execute.call_args_list[0].args[1] == ('a"b', 'order')
     assert provider.select_sql('a"b', 'order') == 'SELECT * FROM "a""b"."order" LIMIT 100;'
     source.cursor.assert_not_called()

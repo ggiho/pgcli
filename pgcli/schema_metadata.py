@@ -5,6 +5,8 @@ from __future__ import annotations
 import psycopg
 from psycopg import sql
 
+from .schema_model import Column, Index, Structure
+
 
 class SchemaMetadata:
     def __init__(self, source):
@@ -47,32 +49,45 @@ class SchemaMetadata:
             oid, kind = relation
             cur.execute(
                 'SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,'
-                'pg_catalog.pg_get_expr(d.adbin,d.adrelid) FROM pg_catalog.pg_attribute a '
+                'pg_catalog.pg_get_expr(d.adbin,d.adrelid),'
+                "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint p WHERE p.conrelid=a.attrelid "
+                "AND p.contype='p' AND a.attnum=ANY(p.conkey)),"
+                'pg_catalog.col_description(a.attrelid,a.attnum) FROM pg_catalog.pg_attribute a '
                 'LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum '
                 'WHERE a.attrelid=%s AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum',
                 (oid,),
             )
-            lines = [self.qualified_name(schema, name), '', 'Columns']
-            for column, datatype, notnull, default in cur.fetchall():
-                lines.append(f'{column}  {datatype}  {"NOT NULL" if notnull else "NULL"}')
-                if default is not None:
-                    lines.append(f'  Default: {default}')
+            result = Structure(
+                columns=[
+                    Column(
+                        str(column),
+                        str(datatype),
+                        not notnull,
+                        bool(primary),
+                        None if default is None else str(default),
+                        str(comment or ''),
+                    )
+                    for column, datatype, notnull, default, primary, comment in cur.fetchall()
+                ]
+            )
             cur.execute(
                 'SELECT conname,pg_catalog.pg_get_constraintdef(oid,true) FROM pg_catalog.pg_constraint WHERE conrelid=%s ORDER BY conname',
                 (oid,),
             )
-            lines.extend(['', 'Constraints'])
-            lines.extend(f'{n}: {definition}' for n, definition in cur.fetchall())
+            constraints = list(cur.fetchall())
             cur.execute(
                 'SELECT indexname,indexdef FROM pg_catalog.pg_indexes WHERE schemaname=%s AND tablename=%s ORDER BY indexname',
                 (schema, name),
             )
-            lines.extend(['', 'Indexes'])
-            lines.extend(str(definition) for _n, definition in cur.fetchall())
+            result.indexes = [Index(str(n), str(definition)) for n, definition in cur.fetchall()]
+            definitions = [f'-- {n}\n{definition}' for n, definition in constraints]
+            definitions.extend(index.definition for index in result.indexes)
             if kind in ('v', 'm'):
                 cur.execute('SELECT pg_catalog.pg_get_viewdef(%s,true)', (oid,))
-                lines.extend(['', 'View definition', cur.fetchone()[0]])
-            return '\n'.join(lines)
+                definitions.insert(0, '-- View query\n' + cur.fetchone()[0])
+            result.definition = '\n\n'.join(definitions)
+            result.note = 'Catalog definitions · full CREATE TABLE is not reconstructed.'
+            return result
 
     @staticmethod
     def qualified_name(schema, name):
