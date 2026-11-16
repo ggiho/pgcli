@@ -160,7 +160,7 @@ def test_keyboard_tabs_sql_search_and_back_preserve_column_filter() -> None:
             await until(lambda: ui.structure is not None and ui.column_search.text == 'amount')
             pipe.send_text('\x1b[Z\r')  # Previous focus is the SQL tab.
             await until(lambda: ui.section == 'SQL')
-            pipe.send_text('\x06PRIMARY\r')
+            pipe.send_text('/PRIMARY\r')
             await until(lambda: ui.sql.buffer.cursor_position > 0)
             pipe.send_text('\x1b')
             await until(lambda: ui.app.layout.has_focus(ui.search))
@@ -208,11 +208,26 @@ def test_detail_views_use_the_available_width(section: str) -> None:
 
 
 @pytest.mark.parametrize('section', ['Indexes', 'SQL'])
-def test_readonly_text_moves_selects_and_copies_without_edits(section: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    'keys,expected',
+    [
+        ('Vjy', 'SELECT id,\n amount\n'),
+        ('yy', 'SELECT id,\n'),
+        ('2yy', 'SELECT id,\n amount\n'),
+        ('ggyiw', 'SELECT'),
+        ('wbyiw', 'SELECT'),
+        ('Gyy', 'FROM orders;\n'),
+        ('gg2j0yiw', 'FROM'),
+        ('vllly', 'SELE'),
+        ('/amount\ryiw', 'amount'),
+    ],
+)
+def test_native_vim_motions_and_yanks(section: str, keys: str, expected: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from pgcli import schema_browser
 
     copied = []
     monkeypatch.setattr(schema_browser, 'copy_text', copied.append)
+    original = 'SELECT id,\n amount\nFROM orders;'
 
     async def scenario():
         with create_pipe_input() as pipe:
@@ -221,31 +236,13 @@ def test_readonly_text_moves_selects_and_copies_without_edits(section: str, monk
             await until(lambda: ui.structure is not None)
             ui.show_section(section)
             area = ui._text_area()
-            original = area.text
-            assert ui.app.layout.has_focus(area)
-            if section == 'SQL':
-                area.buffer.set_document(Document('CREATE TABLE orders (\n id bigint PRIMARY KEY\n);'), bypass_readonly=True)
-                area.buffer.cursor_position = 0
-                original = area.text
-            pipe.send_text('j')
-            await until(lambda: area.buffer.document.cursor_position_row == 1)
-            pipe.send_text('k')
-            await until(lambda: area.buffer.document.cursor_position_row == 0)
-            pipe.send_text('llhvlllly')
+            area.buffer.set_document(Document(original, 0), bypass_readonly=True)
+            pipe.send_text(keys)
             await until(lambda: bool(copied))
-            assert copied == [original[1:5]]
+            assert copied == [expected]
             assert area.text == original and not task.done()
-            # Escape clears selection before leaving the pane.
-            pipe.send_text('\x1b')
-            await until(lambda: area.buffer.selection_state is None)
-            assert ui.app.layout.has_focus(area)
-            pipe.send_text('\x01\x1b[1;2C\x1b[1;2C\x03')
-            await until(lambda: len(copied) == 2)
-            assert copied[-1] == original[:2] and not task.done()
-            ui.copy_text(whole=True)
-            assert copied[-1] == original
-            pipe.send_text('v\x7f')
-            await asyncio.sleep(0.02)
+            pipe.send_text('ddx')
+            await asyncio.sleep(0.05)
             assert area.text == original
             ui.close()
             await task
@@ -267,3 +264,76 @@ def test_text_copy_failure_keeps_selection_for_retry(monkeypatch: pytest.MonkeyP
     ui.copy_text()
     assert 'Copy failed' in ui.status and ui.sql.buffer.selection_state is not None
     assert ui.sql.text.startswith('CREATE TABLE')
+
+
+def test_failed_native_yank_retains_visual_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgcli import schema_browser
+
+    monkeypatch.setattr(schema_browser, 'copy_text', Mock(side_effect=OSError('clipboard unavailable')))
+
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section('SQL')
+            pipe.send_text('Vjy')
+            await until(lambda: 'Copy failed' in ui.status)
+            assert ui.sql.buffer.selection_state is not None
+            copied = []
+            monkeypatch.setattr(schema_browser, 'copy_text', copied.append)
+            pipe.send_text('y')
+            await until(lambda: bool(copied))
+            ui.close()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_return_from_vim_text_keeps_search_typing_literal() -> None:
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section('SQL')
+            pipe.send_text('V')
+            await until(lambda: ui.sql.buffer.selection_state is not None)
+            pipe.send_text('\x1b')
+            await until(lambda: ui.sql.buffer.selection_state is None)
+            assert ui.app.layout.has_focus(ui.sql)
+            pipe.send_text('\x1b')
+            await until(lambda: ui.app.layout.has_focus(ui.search))
+            pipe.send_text('hjklVy')
+            await until(lambda: ui.search.text == 'hjklVy')
+            ui.close()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_vim_escape_is_fast_without_shortening_gg_timeout() -> None:
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section('SQL')
+            ui.sql.buffer.set_document(Document('SELECT 1;\nSELECT 2;', 12), bypass_readonly=True)
+            pipe.send_text('g')
+            await asyncio.sleep(0.15)
+            pipe.send_text('g')
+            await until(lambda: ui.sql.buffer.cursor_position == 0)
+            pipe.send_text('V')
+            await until(lambda: ui.sql.buffer.selection_state is not None)
+            pipe.send_text('\x1b')
+            for _ in range(30):
+                if ui.sql.buffer.selection_state is None:
+                    break
+                await asyncio.sleep(0.01)
+            assert ui.sql.buffer.selection_state is None
+            assert ui.app.layout.has_focus(ui.sql)
+            ui.close()
+            await task
+
+    asyncio.run(scenario())

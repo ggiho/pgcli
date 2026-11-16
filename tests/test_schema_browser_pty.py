@@ -89,7 +89,8 @@ def test_inspection_and_back_do_not_submit_query() -> None:
 
 
 @pytest.mark.parametrize('section', ['SQL', 'Indexes'])
-def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str) -> None:
+@pytest.mark.parametrize('linewise', [False, True])
+def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str, linewise: bool) -> None:
     import fcntl
     import pty
     import struct
@@ -133,13 +134,20 @@ def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str) -
         until(b'Find table')
         until(b'amount')
         os.write(master, b'orders\r' + (b'\x1b[Z' if section == 'SQL' else b'\x1b[Z\x1b[Z') + b'\r')
-        until(b'y copy')
-        os.write(master, b'vlllllly')
+        until(b'y yank')
+        os.write(master, b'Vjy' if linewise else b'vllllly')
         until(b'Copied')
-        assert copied.read_text() == ('CREATE' if section == 'SQL' else 'orders')
+        expected = (
+            (
+                'CREATE TABLE orders (id bigint, amount numeric);\n'
+                if section == 'SQL'
+                else 'orders_pk\n  CREATE UNIQUE INDEX orders_pk ON orders(id)\n'
+            )
+            if linewise
+            else ('CREATE' if section == 'SQL' else 'orders')
+        )
+        assert copied.read_text() == expected
         assert child.poll() is None
-        os.write(master, b'\x1b')
-        time.sleep(0.15)
         os.write(master, b'\x1b')
         time.sleep(0.15)
         os.write(master, b'\x1b')

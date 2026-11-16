@@ -11,18 +11,21 @@ The detail pane has three views, reachable with Tab/Shift+Tab or a mouse click:
 - **Indexes**: index names and their definitions, separate from column data.
 - **SQL**: highlighted server definitions. MySQL shows CREATE SQL; PostgreSQL
   shows catalog constraints/indexes and view queries, without pretending these
-  are a complete CREATE TABLE script. Ctrl+F searches this SQL view.
+  are a complete CREATE TABLE script. `/` searches this SQL view.
 
-In **Indexes** and **SQL**, click to place the cursor or use arrows/`hjkl` to
-move. The current line is underlined while the pane has focus. Press `v` to begin
-or end a text selection, move to extend it, then `y` to copy to the desktop
-clipboard. Without a selection, `y` copies the current line. Shift+arrows and
-mouse drag also select text; Ctrl+C copies a selection. **Copy** and **Copy all**
-provide the same actions as buttons. The text remains read-only.
+**Indexes** and **SQL** use native Vim navigation while focused. Use `hjkl`,
+`w`/`b`, `0`/`$`, `gg`/`G` and counts such as `3j`. `v` selects characters and
+`V` (Shift+v) selects whole lines; extend with a motion and `y` to yank. `yy`
+copies the current line, `2yy` two lines, and `yiw` the current word. `/` and `?`
+search within either view; `n`/`N` repeat the search. Yanks go to the desktop
+clipboard. **Copy** and **Copy all** remain available as buttons.
 
-Escape clears an active selection first, then returns to table search. Clipboard
-failure is reported while preserving the selection for retry. macOS uses pbcopy;
-Linux uses wl-copy, xclip or xsel if available.
+The panes remain read-only. Search/filter/name inputs use ordinary immediate
+text entry, regardless of the main prompt's mode. Escape clears visual selection
+or a pending operator first, then returns to table search. Clipboard errors keep
+the selection available for retry. macOS uses pbcopy; Linux uses wl-copy, xclip or
+xsel if installed. Vim text views keep their multi-key sequence timeout while
+other screens retain short Escape handling.
 
 Filters and selection survive view switches. Escape from details returns to table
 search with its caret preserved; Escape there closes. In list navigation, j/k
