@@ -16,7 +16,6 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.key_binding.bindings.focus import focus_next, focus_previous
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.key_binding.vi_state import InputMode
 from prompt_toolkit.layout import Dimension, DynamicContainer, HSplit, Layout, VSplit, Window
@@ -108,9 +107,6 @@ class SchemaBrowser:
         }
         self.select_button = Button('SELECT draft', partial(self.choose, 'select'), width=16)
         self.insert_button = Button('Insert name', partial(self.choose, 'insert'), width=15)
-        self.cancel_button = Button('Close', self.close)
-        self.copy_button = Button('Copy', self.copy_text, width=10)
-        self.copy_all_button = Button('Copy all', partial(self.copy_text, True), width=12)
         self.app: Application[tuple[str, str] | None] = Application(
             layout=Layout(DynamicContainer(self._body), focused_element=self.search),
             key_bindings=self._bindings(),
@@ -188,32 +184,27 @@ class SchemaBrowser:
             body = VSplit([left, Window(width=1, char='│', style='class:schema.muted'), right], padding=1)
         else:
             body = HSplit([left, Window(height=1, char='─', style='class:schema.muted'), right])
+        actions = [] if self.section in ('SQL', 'Indexes') else [VSplit([self.select_button, self.insert_button], padding=2, height=1)]
         return HSplit([
             Label(' Database  /  Browse', style='class:schema.title'),
             body,
             Label(lambda: self.status, style='class:schema.muted'),
             Label(lambda: self._hint()),
-            VSplit(
-                (
-                    [self.copy_button, self.copy_all_button, self.cancel_button]
-                    if self.section in ('SQL', 'Indexes')
-                    else [self.select_button, self.insert_button, self.cancel_button]
-                ),
-                padding=2,
-                height=1,
-            ),
+            *actions,
         ])
 
     def _hint(self) -> str:
         if self.app.layout.has_focus(self.search):
-            return ' ↑↓ choose · Enter inspect · Tab actions · Esc close'
+            return ' ↑↓ choose · Enter inspect · Tab pane · Esc close'
         if self.app.layout.has_focus(self.control):
-            return ' j/k choose · / find · Enter inspect · Esc search'
+            return ' j/k choose · / find · gt/gT views · Tab pane'
+        if self.app.layout.has_focus(self.select_button) or self.app.layout.has_focus(self.insert_button):
+            return ' ←→ choose action · Enter confirm · Esc columns'
         if self.section in ('SQL', 'Indexes'):
-            return ' Vim · v select · V lines · y yank · / find · Esc back'
+            return ' Vim · V lines · y yank · gt/gT views · Tab pane · Esc back'
         if self.app.layout.has_focus(self.columns_control):
-            return ' j/k inspect · / find column · Esc tables · Tab views'
-        return ' ↑↓ inspect · Esc tables · Tab views/actions'
+            return ' j/k inspect · / find · gt/gT views · Enter actions · Tab pane'
+        return ' ↑↓ inspect · Enter columns · Tab pane · Esc tables'
 
     def _names(self) -> StyleAndTextTuples:
         return [
@@ -411,6 +402,22 @@ class SchemaBrowser:
             )
         self.app.invalidate()
 
+    def cycle_section(self, direction: int) -> None:
+        names = list(self.tabs)
+        self.show_section(names[(names.index(self.section) + direction) % len(names)])
+        if self.section == 'Columns':
+            self.app.layout.focus(self.columns_control)
+
+    def toggle_pane(self) -> None:
+        if self.app.layout.has_focus(self.sql_search) or self.app.layout.has_focus(self.index_search):
+            from prompt_toolkit.search import stop_search
+
+            stop_search()
+        if self.app.layout.has_focus(self.search) or self.app.layout.has_focus(self.control):
+            self.app.layout.focus(self.columns_control if self.section == 'Columns' else self._text_area())
+        else:
+            self.app.layout.focus(self.search)
+
     def _text_area(self) -> TextArea:
         return self.sql if self.section == 'SQL' else self.index_text
 
@@ -425,7 +432,9 @@ class SchemaBrowser:
             self.app.vi_state.input_mode = InputMode.NAVIGATION
             self._text_focus = target
         self.app.editing_mode = EditingMode.VI if reading else EditingMode.EMACS
-        self.app.timeoutlen = 1.0 if reading else 0.05
+        self.app.timeoutlen = (
+            1.0 if reading or self.app.layout.has_focus(self.columns_control) or self.app.layout.has_focus(self.control) else 0.05
+        )
 
     def _before_key(self, _sender: object) -> None:
         self._sync_text_mode()
@@ -455,11 +464,9 @@ class SchemaBrowser:
         self.status = 'Copied lines.' if data.type == SelectionType.LINES else 'Copied text.'
         return True
 
-    def copy_text(self, whole: bool = False) -> None:
+    def copy_text(self) -> None:
         buffer = self._text_area().buffer
-        if whole:
-            data = ClipboardData(buffer.text)
-        elif buffer.selection_state is not None:
+        if buffer.selection_state is not None:
             mode = self.app.editing_mode
             try:
                 self.app.editing_mode = EditingMode.VI
@@ -531,17 +538,40 @@ class SchemaBrowser:
         def inspect_column(_event: KeyPressEvent) -> None:
             self.app.layout.focus(self.columns_control)
 
-        @kb.add('tab')
-        def next_field(event: KeyPressEvent) -> None:
-            focus_next(event)
+        navigation = Condition(
+            lambda: self._reading_text() or self.app.layout.has_focus(self.columns_control) or self.app.layout.has_focus(self.control)
+        )
 
+        @kb.add('g', 't', filter=navigation)
+        def next_view(_event: KeyPressEvent) -> None:
+            self.cycle_section(1)
+
+        @kb.add('g', 'T', filter=navigation)
+        def previous_view(_event: KeyPressEvent) -> None:
+            self.cycle_section(-1)
+
+        @kb.add('tab')
         @kb.add('s-tab')
-        def previous_field(event: KeyPressEvent) -> None:
-            focus_previous(event)
+        def pane(_event: KeyPressEvent) -> None:
+            self.toggle_pane()
+
+        @kb.add('enter', filter=Condition(lambda: self.app.layout.has_focus(self.columns_control)))
+        def actions(_event: KeyPressEvent) -> None:
+            self.app.layout.focus(self.select_button)
+
+        @kb.add(
+            'left', filter=Condition(lambda: self.app.layout.has_focus(self.select_button) or self.app.layout.has_focus(self.insert_button))
+        )
+        @kb.add(
+            'right',
+            filter=Condition(lambda: self.app.layout.has_focus(self.select_button) or self.app.layout.has_focus(self.insert_button)),
+        )
+        def choose_action(_event: KeyPressEvent) -> None:
+            self.app.layout.focus(self.insert_button if self.app.layout.has_focus(self.select_button) else self.select_button)
 
         @kb.add(
             'escape',
-            eager=reading,
+            eager=navigation,
             filter=Condition(lambda: not self.app.layout.has_focus(self.sql_search) and not self.app.layout.has_focus(self.index_search)),
         )
         def back(_event: KeyPressEvent) -> None:
@@ -549,6 +579,8 @@ class SchemaBrowser:
                 self._text_area().buffer.exit_selection()
                 self.app.vi_state.reset()
                 self.app.vi_state.input_mode = InputMode.NAVIGATION
+            elif self.app.layout.has_focus(self.select_button) or self.app.layout.has_focus(self.insert_button):
+                self.app.layout.focus(self.columns_control)
             elif self.app.layout.has_focus(self.search):
                 self.close()
             else:

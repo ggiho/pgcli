@@ -3,7 +3,8 @@
 Run `\browse` in the interactive prompt. Type a schema/table name and use arrows
 to choose it. Enter moves into the column inspector; it does not load or run SQL.
 
-The detail pane has three views, reachable with Tab/Shift+Tab or a mouse click:
+The detail pane has three views. In the body, `gt` selects the next view and
+`gT` the previous one; the view headings are also clickable:
 
 - **Columns**: aligned column names, types, primary keys and nullability. Type in
   Find column to filter by name/type. Select a row to see its full type, default
@@ -18,7 +19,8 @@ The detail pane has three views, reachable with Tab/Shift+Tab or a mouse click:
 `V` (Shift+v) selects whole lines; extend with a motion and `y` to yank. `yy`
 copies the current line, `2yy` two lines, and `yiw` the current word. `/` and `?`
 search within either view; `n`/`N` repeat the search. Yanks go to the desktop
-clipboard. **Copy** and **Copy all** remain available as buttons.
+clipboard. Use `ggVGy` to copy the whole view; duplicate copy/close buttons are
+not shown in these text views.
 
 The panes remain read-only. Search/filter/name inputs use ordinary immediate
 text entry, regardless of the main prompt's mode. Escape clears visual selection
@@ -31,6 +33,12 @@ Filters and selection survive view switches. Escape from details returns to tabl
 search with its caret preserved; Escape there closes. In list navigation, j/k
 move, f or / focuses search, and h/l moves between the table and column lists.
 Typed text is never intercepted by these navigation keys.
+
+Tab and Shift+Tab only toggle between table search and the active detail body.
+They skip view headings, secondary filters and action buttons. In Columns, `/` or
+`f` focuses Find column. Enter on the column grid focuses **SELECT draft**; arrows
+choose between it and **Insert name**, Enter confirms, and Escape returns to the
+grid. These two actions are also clickable.
 
 **SELECT draft** fills `SELECT * ... LIMIT 100;` in the query prompt. **Insert name**
 fills a quoted qualified identifier. Neither action executes SQL. The terminal

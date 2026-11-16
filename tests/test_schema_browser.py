@@ -158,7 +158,7 @@ def test_keyboard_tabs_sql_search_and_back_preserve_column_filter() -> None:
             await until(lambda: bool(ui.objects))
             pipe.send_text('orders\ramount')
             await until(lambda: ui.structure is not None and ui.column_search.text == 'amount')
-            pipe.send_text('\x1b[Z\r')  # Previous focus is the SQL tab.
+            pipe.send_text('\rgtgt')  # Columns -> Indexes -> SQL without focus traversal.
             await until(lambda: ui.section == 'SQL')
             pipe.send_text('/PRIMARY\r')
             await until(lambda: ui.sql.buffer.cursor_position > 0)
@@ -337,3 +337,71 @@ def test_vim_escape_is_fast_without_shortening_gg_timeout() -> None:
             await task
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('section', ['Columns', 'Indexes', 'SQL'])
+def test_tab_only_switches_the_two_work_panes(section: str) -> None:
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section(section)
+            ui.app.layout.focus(ui.search)
+            right = ui.columns_control if section == 'Columns' else ui._text_area().control
+            for key in ['\t', '\x1b[Z']:
+                pipe.send_text(key)
+                await until(lambda: ui.app.layout.has_focus(right))
+                pipe.send_text(key)
+                await until(lambda: ui.app.layout.has_focus(ui.search))
+            ui.close()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_vim_tab_switch_preserves_cursors_and_filter() -> None:
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section('Columns')
+            pipe.send_text('amount\rgtgt')
+            await until(lambda: ui.section == 'SQL')
+            pipe.send_text('w')
+            await until(lambda: ui.sql.buffer.cursor_position > 0)
+            position = ui.sql.buffer.cursor_position
+            pipe.send_text('gT')
+            await until(lambda: ui.section == 'Indexes')
+            pipe.send_text('gT')
+            await until(lambda: ui.section == 'Columns')
+            assert ui.column_search.text == 'amount'
+            assert ui.app.layout.has_focus(ui.columns_control)
+            pipe.send_text('gT')
+            await until(lambda: ui.section == 'SQL')
+            assert ui.sql.buffer.cursor_position == position
+            pipe.send_text('\tgtgT')
+            await until(lambda: ui.search.text == 'gtgT')  # Search fields never switch tabs.
+            ui.close()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_column_actions_remain_keyboard_accessible() -> None:
+    provider = fixture_provider()
+    provider.qualified_name.return_value = '"public"."orders"'
+
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(provider, input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            pipe.send_text('orders\r\r\r')
+            await until(lambda: ui.app.layout.has_focus(ui.select_button))
+            assert not task.done()
+            pipe.send_text('\x1b[C\r')
+            return await asyncio.wait_for(task, 3)
+
+    assert asyncio.run(scenario()) == ('insert', '"public"."orders"')

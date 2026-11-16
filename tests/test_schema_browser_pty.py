@@ -63,10 +63,10 @@ def test_inspection_and_back_do_not_submit_query() -> None:
         assert child.poll() is None and b'RESULT_JSON' not in output
         offset = len(output)
         os.write(master, b'\x1b')
-        until(b'Enter inspect', offset, 0.5)
+        until(b'Enter inspec', offset, 0.5)
         os.write(master, b'\x7f\x7f\x7f\x7f\x7f\x7forders\r')
         # Enter returns to the existing filtered column inspector.
-        os.write(master, b'\r\t\t\r')
+        os.write(master, b'\r\r\r')
         until(b'RESULT_JSON')
         child.wait(timeout=5)
         while select.select([master], [], [], 0.05)[0]:
@@ -99,7 +99,7 @@ def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str, l
     if sys.platform != 'darwin':
         pytest.skip('pbcopy integration')
     executable = tmp_path / 'pbcopy'
-    executable.write_text('#!/bin/sh\ncat > "$SCHEMA_COPY_TEST"\n')
+    executable.write_text('#!/bin/sh\nexec /bin/cat > "$SCHEMA_COPY_TEST"\n')
     executable.chmod(0o755)
     copied = tmp_path / 'copied.txt'
     harness = HARNESS.replace('Column,Structure', 'Column,Index,Structure').replace(
@@ -133,7 +133,7 @@ def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str, l
     try:
         until(b'Find table')
         until(b'amount')
-        os.write(master, b'orders\r' + (b'\x1b[Z' if section == 'SQL' else b'\x1b[Z\x1b[Z') + b'\r')
+        os.write(master, b'orders\r\r' + (b'gtgt' if section == 'SQL' else b'gt'))
         until(b'y yank')
         os.write(master, b'Vjy' if linewise else b'vllllly')
         until(b'Copied')
