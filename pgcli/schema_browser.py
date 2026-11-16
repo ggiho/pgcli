@@ -16,9 +16,11 @@ from prompt_toolkit.key_binding.bindings.focus import focus_next, focus_previous
 from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.layout import Dimension, DynamicContainer, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.widgets import Button, Frame, Label, SearchToolbar, TextArea
+from pygments.lexers.sql import PostgresLexer
 
 
 class Metadata(Protocol):
@@ -42,7 +44,9 @@ class SchemaBrowser:
         self.cache: dict[tuple[str, str], str] = {}
         self.search = TextArea(height=1, multiline=False, prompt='Tables: ')
         self.column_search = SearchToolbar(text_if_not_searching='Ctrl+F in structure: find column or text')
-        self.preview = TextArea(read_only=True, scrollbar=True, search_field=self.column_search, focus_on_click=True)
+        self.preview = TextArea(
+            read_only=True, scrollbar=True, search_field=self.column_search, focus_on_click=True, lexer=PygmentsLexer(PostgresLexer)
+        )
         self.control = FormattedTextControl(
             self._names, focusable=True, show_cursor=False, get_cursor_position=lambda: Point(0, self.index)
         )
@@ -92,13 +96,13 @@ class SchemaBrowser:
 
     def _names(self) -> list[tuple[str, str]]:
         return [
-            ('class:schema.selected' if i == self.index else '', f' {schema}.{name} [{kind}]\n')
-            for i, (schema, name, kind) in enumerate(self.matches)
+            ('class:schema.selected' if i == self.index else '', f' {schema}.{name}\n')
+            for i, (schema, name, _kind) in enumerate(self.matches)
         ] or [('', ' No matching tables')]
 
     def _filter(self, *_args: object) -> None:
         words = self.search.text.casefold().split()
-        self.matches = [row for row in self.objects if all(w in f'{row[0]}.{row[1]} {row[2]}'.casefold() for w in words)]
+        self.matches = [row for row in self.objects if all(w in f'{row[0]}.{row[1]}'.casefold() for w in words)]
         self.index = 0
         self.show_selected()
 
