@@ -375,7 +375,7 @@ class PGExecute:
             if not sql:
                 continue
             try:
-                if explain_mode:
+                if explain_mode and not sql.startswith('\\'):
                     sql = self.explain_prefix() + sql
                 elif pgspecial:
                     # \G is treated specially since we have to set the expanded output.

@@ -21,6 +21,15 @@ _logger = logging.getLogger(__name__)
 def pgcli_bindings(pgcli):
     """Custom key bindings for pgcli."""
     kb = KeyBindings()
+    pgcli.prompt_actions = {}
+
+    def action(name):
+        def register(handler):
+            pgcli.prompt_actions[name] = handler
+            return handler
+
+        return register
+
     viewer = getattr(pgcli, "result_viewer", None) or configured_result_viewer()
     pgcli.result_viewer = viewer
     if viewer is not None:
@@ -51,29 +60,29 @@ def pgcli_bindings(pgcli):
             if not atuin.search_history(event, pgcli.atuin_author):
                 buffer.auto_up(count=event.arg)
 
-    @kb.add("f2")
+    @action("smart")
     def _(event):
         """Enable/Disable SmartCompletion Mode."""
-        _logger.debug("Detected F2 key.")
+        _logger.debug("Detected smart key.")
         pgcli.completer.smart_completion = not pgcli.completer.smart_completion
 
-    @kb.add("f3")
+    @action("multiline")
     def _(event):
         """Enable/Disable Multiline Mode."""
-        _logger.debug("Detected F3 key.")
+        _logger.debug("Detected multiline key.")
         pgcli.multi_line = not pgcli.multi_line
 
-    @kb.add("f4")
+    @action("mode")
     def _(event):
         """Toggle between Vi and Emacs mode."""
-        _logger.debug("Detected F4 key.")
+        _logger.debug("Detected mode key.")
         pgcli.vi_mode = not pgcli.vi_mode
         event.app.editing_mode = EditingMode.VI if pgcli.vi_mode else EditingMode.EMACS
 
-    @kb.add("f5")
+    @action("explain")
     def _(event):
         """Toggle between Vi and Emacs mode."""
-        _logger.debug("Detected F5 key.")
+        _logger.debug("Detected explain key.")
         pgcli.explain_mode = not pgcli.explain_mode
 
     @kb.add("tab")

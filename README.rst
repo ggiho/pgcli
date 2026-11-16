@@ -389,3 +389,9 @@ preserving the draft and cursor. Reopening restores viewer state without SQL
 execution. Alt+E and Alt+T are unchanged. Inline results are also remembered.
 The private per-process cache is removed on normal exit; results over 64 MiB are
 not cached. Restart pgcli after updating. Other pagers retain their bindings.
+
+Fork schema browser
+-------------------
+
+Use ``\browse`` for table/column metadata and ``\keys`` for interactive actions without function keys.
+See `SCHEMA_BROWSER.md <SCHEMA_BROWSER.md>`_.

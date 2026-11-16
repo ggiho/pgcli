@@ -373,6 +373,18 @@ class PGCli:
         return text.startswith("\\n ") and not text.startswith("\\ns ") and not text.startswith("\\nd ")
 
     def register_special_commands(self):
+        def interactive_only(**_kwargs):
+            return [(None, None, None, r'Use this command in the interactive prompt. See \keys.')]
+
+        for name, description in [
+            ('browse', 'Browse table and column metadata'),
+            ('smart', 'Toggle smart completion'),
+            ('multiline', 'Toggle multiline input'),
+            ('mode', 'Toggle Vi/Emacs mode'),
+            ('explain', 'Toggle EXPLAIN ANALYZE mode (executes SQL)'),
+            ('keys', 'List interactive commands'),
+        ]:
+            self.pgspecial.register(interactive_only, '\\' + name, '\\' + name, description)
         self.pgspecial.register(
             self.toggle_named_query_quiet,
             "\\nq",
@@ -1057,16 +1069,35 @@ class PGCli:
             print("Version:", __version__)
             print("Home: https://pgcli.com")
 
+        pending_draft = ''
         try:
             while True:
                 try:
-                    text = self.prompt_app.prompt()
+                    text = self.prompt_app.prompt(default=pending_draft) if pending_draft else self.prompt_app.prompt()
+                    pending_draft = ''
                 except KeyboardInterrupt:
                     continue
                 except EOFError:
                     if not self._check_ongoing_transaction_and_allow_quitting():
                         continue
                     raise
+
+                if text.strip().startswith((r'\browse', r'\smart', r'\multiline', r'\mode', r'\explain', r'\keys')):
+                    from .prompt_commands import run_prompt_command
+
+                    try:
+                        handled, draft = run_prompt_command(self, text)
+                    except (KeyboardInterrupt, EOFError):
+                        end_history(False)
+                        continue
+                    except Exception as error:
+                        click.secho(f'Could not complete command: {error}', err=True, fg='red')
+                        end_history(False)
+                        continue
+                    if handled:
+                        pending_draft = draft or ''
+                        end_history(True)
+                        continue
 
                 try:
                     text = self.handle_editor_command(text)

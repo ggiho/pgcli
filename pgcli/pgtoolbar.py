@@ -24,14 +24,14 @@ def create_toolbar_tokens_func(pgcli):
         result.append(("class:bottom-toolbar", " "))
 
         if pgcli.completer.smart_completion:
-            result.append(("class:bottom-toolbar.on", "[F2] Smart Completion: ON  "))
+            result.append(("class:bottom-toolbar.on", "\\smart Smart Completion: ON  "))
         else:
-            result.append(("class:bottom-toolbar.off", "[F2] Smart Completion: OFF  "))
+            result.append(("class:bottom-toolbar.off", "\\smart Smart Completion: OFF  "))
 
         if pgcli.multi_line:
-            result.append(("class:bottom-toolbar.on", "[F3] Multiline: ON  "))
+            result.append(("class:bottom-toolbar.on", "\\multiline Multiline: ON  "))
         else:
-            result.append(("class:bottom-toolbar.off", "[F3] Multiline: OFF  "))
+            result.append(("class:bottom-toolbar.off", "\\multiline Multiline: OFF  "))
 
         if pgcli.multi_line:
             if pgcli.multiline_mode == "safe":
@@ -40,14 +40,14 @@ def create_toolbar_tokens_func(pgcli):
                 result.append(("class:bottom-toolbar", " (Semi-colon [;] will end the line) "))
 
         if pgcli.vi_mode:
-            result.append(("class:bottom-toolbar", "[F4] Vi-mode (" + _get_vi_mode() + ")  "))
+            result.append(("class:bottom-toolbar", "\\mode Vi-mode (" + _get_vi_mode() + ")  "))
         else:
-            result.append(("class:bottom-toolbar", "[F4] Emacs-mode  "))
+            result.append(("class:bottom-toolbar", "\\mode Emacs-mode  "))
 
         if pgcli.explain_mode:
-            result.append(("class:bottom-toolbar", "[F5] Explain: ON "))
+            result.append(("class:bottom-toolbar", "\\explain Analyze: ON "))
         else:
-            result.append(("class:bottom-toolbar", "[F5] Explain: OFF "))
+            result.append(("class:bottom-toolbar", "\\explain Analyze: OFF "))
 
         if pgcli.pgexecute.failed_transaction():
             result.append(("class:bottom-toolbar.transaction.failed", "     Failed transaction"))
