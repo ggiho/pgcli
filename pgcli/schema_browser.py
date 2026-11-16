@@ -20,11 +20,13 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.output import Output
+from prompt_toolkit.selection import SelectionType
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Label, SearchToolbar, TextArea
 
 from pygments.lexers.sql import PostgresLexer
+from pgcli.schema_clipboard import copy_text
 from pgcli.schema_model import Column, Structure
 
 
@@ -67,7 +69,9 @@ class SchemaBrowser:
         self.search = TextArea(height=1, multiline=False, prompt=' Find table  ')
         self.column_search = TextArea(height=1, multiline=False, prompt=' Find column  ')
         self.sql_search = SearchToolbar()
-        self.sql = TextArea(read_only=True, scrollbar=True, lexer=PygmentsLexer(PostgresLexer), search_field=self.sql_search)
+        self.sql = TextArea(
+            read_only=True, scrollbar=True, lexer=PygmentsLexer(PostgresLexer), search_field=self.sql_search, focus_on_click=True
+        )
         self.details = TextArea(read_only=True, height=3, style='class:schema.muted')
         self.control = FormattedTextControl(
             self._names, focusable=True, show_cursor=False, get_cursor_position=lambda: Point(0, self.index)
@@ -77,7 +81,7 @@ class SchemaBrowser:
             self._columns, focusable=True, show_cursor=False, get_cursor_position=lambda: Point(0, self.column_index)
         )
         self.columns_window = Window(self.columns_control, wrap_lines=False)
-        self.index_text = TextArea(read_only=True, scrollbar=True, lexer=PygmentsLexer(PostgresLexer))
+        self.index_text = TextArea(read_only=True, scrollbar=True, lexer=PygmentsLexer(PostgresLexer), focus_on_click=True)
         self.tabs = {
             name: Button(name, partial(self.show_section, name), width=len(name) + 4, left_symbol=' ', right_symbol=' ')
             for name in ['Columns', 'Indexes', 'SQL']
@@ -85,6 +89,8 @@ class SchemaBrowser:
         self.select_button = Button('SELECT draft', partial(self.choose, 'select'), width=16)
         self.insert_button = Button('Insert name', partial(self.choose, 'insert'), width=15)
         self.cancel_button = Button('Close', self.close)
+        self.copy_button = Button('Copy', self.copy_text, width=10)
+        self.copy_all_button = Button('Copy all', partial(self.copy_text, True), width=12)
         self.app: Application[tuple[str, str] | None] = Application(
             layout=Layout(DynamicContainer(self._body), focused_element=self.search),
             key_bindings=self._bindings(),
@@ -103,11 +109,15 @@ class SchemaBrowser:
                     'button': 'bg:default',
                     'button.focused': 'reverse',
                     'tab.active': 'bold underline',
+                    'cursor-line': 'underline',
+                    'selected': 'reverse',
                 }),
             ]),
             input=input_stream,
             output=output_stream,
         )
+        for area in (self.sql, self.index_text):
+            area.window.cursorline = Condition(partial(self.app.layout.has_focus, area))
         self.app.ttimeoutlen = self.app.timeoutlen = 0.05
         self.search.buffer.on_text_changed += self._filter
         self.column_search.buffer.on_text_changed += self._filter_columns
@@ -159,7 +169,15 @@ class SchemaBrowser:
             body,
             Label(lambda: self.status, style='class:schema.muted'),
             Label(lambda: self._hint()),
-            VSplit([self.select_button, self.insert_button, self.cancel_button], padding=2, height=1),
+            VSplit(
+                (
+                    [self.copy_button, self.copy_all_button, self.cancel_button]
+                    if self.section in ('SQL', 'Indexes')
+                    else [self.select_button, self.insert_button, self.cancel_button]
+                ),
+                padding=2,
+                height=1,
+            ),
         ])
 
     def _hint(self) -> str:
@@ -167,8 +185,8 @@ class SchemaBrowser:
             return ' ↑↓ choose · Enter inspect · Tab actions · Esc close'
         if self.app.layout.has_focus(self.control):
             return ' j/k choose · / find · Enter inspect · Esc search'
-        if self.section == 'SQL':
-            return ' Ctrl+F find in SQL · Esc tables · Tab views/actions'
+        if self.section in ('SQL', 'Indexes'):
+            return ' hjkl move · v select · y copy · Shift+arrows select · Esc back'
         if self.app.layout.has_focus(self.columns_control):
             return ' j/k inspect · / find column · Esc tables · Tab views'
         return ' ↑↓ inspect · Esc tables · Tab views/actions'
@@ -369,6 +387,30 @@ class SchemaBrowser:
             )
         self.app.invalidate()
 
+    def _text_area(self) -> TextArea:
+        return self.sql if self.section == 'SQL' else self.index_text
+
+    def copy_text(self, whole: bool = False) -> None:
+        area = self._text_area()
+        buffer = area.buffer
+        if whole:
+            text = buffer.text
+        elif buffer.selection_state is not None:
+            _document, data = buffer.document.cut_selection()
+            text = data.text
+        else:
+            text = buffer.document.current_line
+        if not text:
+            self.status = 'Nothing selected to copy.'
+            return
+        try:
+            copy_text(text)
+        except Exception as error:
+            self.status = f'Copy failed: {error}'
+            return
+        self.app.clipboard.set_text(text)
+        self.status = 'Copied all text.' if whole else 'Copied selection.' if buffer.selection_state is not None else 'Copied line.'
+
     def choose(self, action: str) -> None:
         if self.matches:
             schema, name, _kind = self.matches[self.index]
@@ -383,6 +425,36 @@ class SchemaBrowser:
         kb = KeyBindings()
         tables = Condition(lambda: self.app.layout.has_focus(self.search) or self.app.layout.has_focus(self.control))
         columns = Condition(lambda: self.app.layout.has_focus(self.column_search) or self.app.layout.has_focus(self.columns_control))
+
+        reading = Condition(lambda: self.section in ('SQL', 'Indexes') and self.app.layout.has_focus(self._text_area()))
+
+        @kb.add('h', filter=reading)
+        def text_left(_event: KeyPressEvent) -> None:
+            self._text_area().buffer.cursor_left()
+
+        @kb.add('l', filter=reading)
+        def text_right(_event: KeyPressEvent) -> None:
+            self._text_area().buffer.cursor_right()
+
+        @kb.add('j', filter=reading)
+        def text_down(_event: KeyPressEvent) -> None:
+            self._text_area().buffer.cursor_down()
+
+        @kb.add('k', filter=reading)
+        def text_up(_event: KeyPressEvent) -> None:
+            self._text_area().buffer.cursor_up()
+
+        @kb.add('v', filter=reading)
+        def text_select(_event: KeyPressEvent) -> None:
+            buffer = self._text_area().buffer
+            if buffer.selection_state is not None:
+                buffer.exit_selection()
+            else:
+                buffer.start_selection(SelectionType.CHARACTERS)
+
+        @kb.add('y', filter=reading)
+        def text_copy(_event: KeyPressEvent) -> None:
+            self.copy_text()
 
         @kb.add('j', filter=Condition(lambda: self.app.layout.has_focus(self.control)))
         @kb.add('down', filter=tables)
@@ -444,14 +516,19 @@ class SchemaBrowser:
 
         @kb.add('escape', filter=Condition(lambda: not self.app.layout.has_focus(self.sql_search)))
         def back(_event: KeyPressEvent) -> None:
-            if self.app.layout.has_focus(self.search):
+            if reading() and self._text_area().buffer.selection_state is not None:
+                self._text_area().buffer.exit_selection()
+            elif self.app.layout.has_focus(self.search):
                 self.close()
             else:
                 self.app.layout.focus(self.search)
 
         @kb.add('c-c')
         def cancel(_event: KeyPressEvent) -> None:
-            self.close()
+            if reading() and self._text_area().buffer.selection_state is not None:
+                self.copy_text()
+            else:
+                self.close()
 
         return kb
 

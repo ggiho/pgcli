@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import Mock
 
 from prompt_toolkit.data_structures import Size
+from prompt_toolkit.document import Document
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 import pytest
@@ -204,3 +205,65 @@ def test_detail_views_use_the_available_width(section: str) -> None:
             assert checked
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('section', ['Indexes', 'SQL'])
+def test_readonly_text_moves_selects_and_copies_without_edits(section: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgcli import schema_browser
+
+    copied = []
+    monkeypatch.setattr(schema_browser, 'copy_text', copied.append)
+
+    async def scenario():
+        with create_pipe_input() as pipe:
+            ui = SchemaBrowser(fixture_provider(), input_stream=pipe, output_stream=DummyOutput())
+            task = asyncio.create_task(ui.app.run_async(pre_run=ui.start))
+            await until(lambda: ui.structure is not None)
+            ui.show_section(section)
+            area = ui._text_area()
+            original = area.text
+            assert ui.app.layout.has_focus(area)
+            if section == 'SQL':
+                area.buffer.set_document(Document('CREATE TABLE orders (\n id bigint PRIMARY KEY\n);'), bypass_readonly=True)
+                area.buffer.cursor_position = 0
+                original = area.text
+            pipe.send_text('j')
+            await until(lambda: area.buffer.document.cursor_position_row == 1)
+            pipe.send_text('k')
+            await until(lambda: area.buffer.document.cursor_position_row == 0)
+            pipe.send_text('llhvlllly')
+            await until(lambda: bool(copied))
+            assert copied == [original[1:5]]
+            assert area.text == original and not task.done()
+            # Escape clears selection before leaving the pane.
+            pipe.send_text('\x1b')
+            await until(lambda: area.buffer.selection_state is None)
+            assert ui.app.layout.has_focus(area)
+            pipe.send_text('\x01\x1b[1;2C\x1b[1;2C\x03')
+            await until(lambda: len(copied) == 2)
+            assert copied[-1] == original[:2] and not task.done()
+            ui.copy_text(whole=True)
+            assert copied[-1] == original
+            pipe.send_text('v\x7f')
+            await asyncio.sleep(0.02)
+            assert area.text == original
+            ui.close()
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_text_copy_failure_keeps_selection_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from prompt_toolkit.input import DummyInput
+
+    from pgcli import schema_browser
+
+    ui = SchemaBrowser(fixture_provider(), input_stream=DummyInput(), output_stream=DummyOutput())
+    ui._apply(fixture_provider().describe.return_value)
+    ui.show_section('SQL')
+    ui.sql.buffer.start_selection()
+    ui.sql.buffer.cursor_position = 6
+    monkeypatch.setattr(schema_browser, 'copy_text', Mock(side_effect=OSError('clipboard unavailable')))
+    ui.copy_text()
+    assert 'Copy failed' in ui.status and ui.sql.buffer.selection_state is not None
+    assert ui.sql.text.startswith('CREATE TABLE')

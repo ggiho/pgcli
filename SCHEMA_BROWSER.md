@@ -13,6 +13,17 @@ The detail pane has three views, reachable with Tab/Shift+Tab or a mouse click:
   shows catalog constraints/indexes and view queries, without pretending these
   are a complete CREATE TABLE script. Ctrl+F searches this SQL view.
 
+In **Indexes** and **SQL**, click to place the cursor or use arrows/`hjkl` to
+move. The current line is underlined while the pane has focus. Press `v` to begin
+or end a text selection, move to extend it, then `y` to copy to the desktop
+clipboard. Without a selection, `y` copies the current line. Shift+arrows and
+mouse drag also select text; Ctrl+C copies a selection. **Copy** and **Copy all**
+provide the same actions as buttons. The text remains read-only.
+
+Escape clears an active selection first, then returns to table search. Clipboard
+failure is reported while preserving the selection for retry. macOS uses pbcopy;
+Linux uses wl-copy, xclip or xsel if available.
+
 Filters and selection survive view switches. Escape from details returns to table
 search with its caret preserved; Escape there closes. In list navigation, j/k
 move, f or / focuses search, and h/l moves between the table and column lists.

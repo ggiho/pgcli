@@ -86,3 +86,68 @@ def test_inspection_and_back_do_not_submit_query() -> None:
             child.wait(timeout=3)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.parametrize('section', ['SQL', 'Indexes'])
+def test_copy_from_text_pane_reaches_desktop_clipboard(tmp_path, section: str) -> None:
+    import fcntl
+    import pty
+    import struct
+    import termios
+
+    if sys.platform != 'darwin':
+        pytest.skip('pbcopy integration')
+    executable = tmp_path / 'pbcopy'
+    executable.write_text('#!/bin/sh\ncat > "$SCHEMA_COPY_TEST"\n')
+    executable.chmod(0o755)
+    copied = tmp_path / 'copied.txt'
+    harness = HARNESS.replace('Column,Structure', 'Column,Index,Structure').replace(
+        "[], 'CREATE TABLE", "[Index('orders_pk','CREATE UNIQUE INDEX orders_pk ON orders(id)')], 'CREATE TABLE"
+    )
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
+    child = subprocess.Popen(
+        [sys.executable, '-c', harness],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        start_new_session=True,
+        env=dict(
+            os.environ,
+            TERM='xterm-256color',
+            PROMPT_TOOLKIT_NO_CPR='1',
+            PATH=str(tmp_path) + os.pathsep + os.environ['PATH'],
+            SCHEMA_COPY_TEST=str(copied),
+        ),
+    )
+    output = bytearray()
+
+    def until(marker: bytes) -> None:
+        deadline = time.monotonic() + 20
+        while marker not in output:
+            assert time.monotonic() < deadline, bytes(output)[-2000:]
+            if select.select([master], [], [], 0.02)[0]:
+                output.extend(os.read(master, 65536))
+
+    try:
+        until(b'Find table')
+        until(b'amount')
+        os.write(master, b'orders\r' + (b'\x1b[Z' if section == 'SQL' else b'\x1b[Z\x1b[Z') + b'\r')
+        until(b'y copy')
+        os.write(master, b'vlllllly')
+        until(b'Copied')
+        assert copied.read_text() == ('CREATE' if section == 'SQL' else 'orders')
+        assert child.poll() is None
+        os.write(master, b'\x1b')
+        time.sleep(0.15)
+        os.write(master, b'\x1b')
+        time.sleep(0.15)
+        os.write(master, b'\x1b')
+        until(b'RESULT_JSON')
+        assert child.wait(timeout=5) == 0
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        os.close(master)
+        os.close(slave)
