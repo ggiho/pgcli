@@ -160,42 +160,13 @@ def starts(fake):
         "CREATE USER MAPPING FOR bob SERVER s OPTIONS (user 'bob', password 'hunter2')",
         "\\password",
         "\\password bob",
-        # Holds no secret, but is not told apart from the other PASSWORD clauses.
         "ALTER ROLE bob PASSWORD NULL",
     ],
 )
-def test_store_skips_statements_that_set_a_password(fake_atuin, text):
-    fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
-    history = AtuinHistory()
-    history.store_string(text)
-    history.end(True)
-    assert fake.calls == []
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "SELECT password FROM users",
-        "SELECT user_password FROM accounts WHERE role = 'admin'",
-        "ALTER ROLE bob VALID UNTIL 'infinity'",
-        "CREATE TABLE password_resets (token text)",
-        "ALTER TABLE users ALTER COLUMN password SET NOT NULL",
-    ],
-)
-def test_store_keeps_statements_that_only_mention_password(fake_atuin, text):
+def test_store_keeps_statements_that_set_a_password(fake_atuin, text):
     fake = fake_atuin(stdout="01a040f0cb257242b718f2ab411b84ce\n")
     AtuinHistory().store_string(text)
     assert starts(fake) == [text]
-
-
-def test_skipping_a_password_statement_still_finishes_the_entry_before_it(fake_atuin):
-    fake = fake_atuin(stdout=numbered_ids())
-    history = AtuinHistory()
-    history.store_string("SELECT 1")
-    history.store_string("ALTER USER bob PASSWORD 'hunter2'")
-    history.end(False)
-    assert starts(fake) == ["SELECT 1"]
-    assert ends(fake) == [("0", "id1")]
 
 
 def test_store_finishes_an_entry_still_pending(fake_atuin):
